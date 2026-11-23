@@ -297,9 +297,10 @@ final class AccountPanelController: NSViewController {
             v.addSubview(f)
             return f
         }
-        nickField = formRow("昵称:", 104, "请输入昵称（可留空）")
-        accField = formRow("账户:", 76, "请输入账户")
-        passField = formRow("密码:", 48, "请输入密码")
+        // 昵称框顶边 y=118，与标签区底边 y=128 正好间隔 10px
+        nickField = formRow("昵称:", 96, "请输入昵称（可留空）")
+        accField = formRow("账户:", 68, "请输入账户")
+        passField = formRow("密码:", 40, "请输入密码")
 
         // 按钮行
         @discardableResult
