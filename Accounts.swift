@@ -228,6 +228,7 @@ final class AccountPanelController: NSViewController {
     private let store = AccountStore.shared
     private var flowView: TagFlowView!
     private var inputField: NSTextField!
+    private var selectedLabel: NSTextField!
     private var hintLabel: NSTextField!
     private var pendingLoad: DispatchWorkItem?
     private var pendingCopy: DispatchWorkItem?
@@ -249,23 +250,43 @@ final class AccountPanelController: NSViewController {
 
         // 内容输入框（标签下方，可选中复制）
         inputField = NSTextField(frame: NSRect(x: 8, y: 98, width: 288, height: 22))
-        inputField.placeholderString = "昵称:用户名:密码 或 用户名:密码（回车保存/新增）"
+        inputField.placeholderString = "昵称:用户名:密码 或 用户名:密码"
         inputField.font = NSFont.systemFont(ofSize: 11)
         inputField.target = self
         inputField.action = #selector(inputCommitted)
         v.addSubview(inputField)
 
+        // 操作按钮行：复制 / 新增 / 保存修改
+        func smallButton(_ title: String, _ x: CGFloat, _ w: CGFloat, _ sel: Selector) -> NSButton {
+            let b = NSButton(title: title, target: self, action: sel)
+            b.frame = NSRect(x: x, y: 72, width: w, height: 22)
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.font = NSFont.systemFont(ofSize: 11)
+            v.addSubview(b)
+            return b
+        }
+        smallButton("复制", 8, 56, #selector(copyInput))
+        smallButton("新增", 68, 56, #selector(addNewAccount))
+        smallButton("保存修改", 128, 80, #selector(saveSelected))
+        selectedLabel = NSTextField(labelWithString: "")
+        selectedLabel.frame = NSRect(x: 212, y: 76, width: 84, height: 14)
+        selectedLabel.font = NSFont.systemFont(ofSize: 10)
+        selectedLabel.textColor = .secondaryLabelColor
+        selectedLabel.lineBreakMode = .byTruncatingTail
+        v.addSubview(selectedLabel)
+
         // 状态提示
         hintLabel = NSTextField(labelWithString: "")
-        hintLabel.frame = NSRect(x: 8, y: 78, width: 288, height: 16)
+        hintLabel.frame = NSRect(x: 8, y: 54, width: 288, height: 16)
         hintLabel.font = NSFont.systemFont(ofSize: 10)
         v.addSubview(hintLabel)
 
         // 交互说明
         let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let footer = NSTextField(wrappingLabelWithString:
-            "单击标签＝载入内容（输入框内可选中复制）· 双击＝复制用户名 · 三击＝复制密码（90 秒后清剪贴板）\n标签 ✕＝删除 · 输入后回车＝保存所选 / 无选中则新增 · v\(ver)")
-        footer.frame = NSRect(x: 8, y: 4, width: 288, height: 70)
+            "单击标签＝载入内容 · 双击＝复制用户名 · 三击＝复制密码（90 秒后清剪贴板）\n复制＝复制输入框全部内容 · 新增＝按输入框内容新增账户\n保存修改＝更新所选标签 · 标签 ✕＝删除 · v\(ver)")
+        footer.frame = NSRect(x: 8, y: 4, width: 288, height: 46)
         footer.font = NSFont.systemFont(ofSize: 9)
         footer.textColor = .tertiaryLabelColor
         v.addSubview(footer)
@@ -328,6 +349,11 @@ final class AccountPanelController: NSViewController {
             flowView.addSubview(container)
         }
         flowView.needsLayout = true
+        if let sel = selectedUsername, let acc = store.accounts.first(where: { $0.username == sel }) {
+            selectedLabel.stringValue = "选中:\(displayName(acc))"
+        } else {
+            selectedLabel.stringValue = "未选中"
+        }
     }
 
     // MARK: 标签交互（单击载入 / 双击用户名 / 三击密码）
@@ -385,8 +411,73 @@ final class AccountPanelController: NSViewController {
         selectedUsername = name
         rebuildTags()
         inputField.stringValue = contentText(acc)
-        showHint("已载入「\(displayName(acc))」，输入框内可选中复制", ok: true)
+        selectedLabel.stringValue = "选中:\(displayName(acc))"
+        showHint("已载入「\(displayName(acc))」，可选中复制或改后保存；点「新增」则添加新账户", ok: true)
     }
+
+    // MARK: 输入框按钮
+
+    /// 复制输入框全部内容
+    @objc private func copyInput() {
+        let text = inputField.stringValue
+        guard !text.isEmpty else { showHint("输入框为空，无可复制内容", ok: false); return }
+        writePasteboard(text)
+        showHint("已复制输入框内容", ok: true)
+    }
+
+    /// 按输入框内容新增账户（不受选中影响）
+    @objc private func addNewAccount() {
+        let (nickname, username, password, err) = parseInput()
+        if let err = err { showHint(err, ok: false); return }
+        if let err = store.add(username: username, password: password, nickname: nickname) {
+            showHint(err, ok: false); return
+        }
+        selectedUsername = username
+        rebuildTags()
+        showHint("已新增：\(username)", ok: true)
+    }
+
+    /// 保存修改到所选账户
+    @objc private func saveSelected() {
+        guard let sel = selectedUsername else {
+            showHint("请先单击标签选中一个账户，再保存修改", ok: false); return
+        }
+        let (nickname, username, password, err) = parseInput()
+        if let err = err { showHint(err, ok: false); return }
+        var target = sel
+        if username != sel {
+            if let e = store.rename(sel, to: username) { showHint(e, ok: false); return }
+            target = username
+        }
+        if let e = store.setNickname(username: target, nickname: nickname) {
+            showHint(e, ok: false); return
+        }
+        if let e = store.setPassword(username: target, password: password) {
+            showHint(e, ok: false); return
+        }
+        selectedUsername = target
+        rebuildTags()
+        showHint("已保存「\(target)」", ok: true)
+    }
+
+    /// 解析输入框：昵称:用户名:密码 或 用户名:密码
+    private func parseInput() -> (nickname: String?, username: String, password: String, error: String?) {
+        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return (nil, "", "", "输入为空") }
+        let parts = text.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        switch parts.count {
+        case 2:
+            return (nil, parts[0], parts[1], nil)
+        case 3:
+            let nick = parts[0].isEmpty ? nil : parts[0]
+            return (nick, parts[1], parts[2], nil)
+        default:
+            return (nil, "", "", "格式：昵称:用户名:密码 或 用户名:密码")
+        }
+    }
+
+    // MARK: 回车＝有选中则保存，无选中则新增
 
     private func copyUsername(name: String) {
         writePasteboard(name)
@@ -416,47 +507,10 @@ final class AccountPanelController: NSViewController {
     // MARK: 输入框保存/新增
 
     @objc private func inputCommitted() {
-        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { showHint("输入为空", ok: false); return }
-
-        let parts = text.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        var nickname: String? = nil
-        var username: String
-        var password: String
-        switch parts.count {
-        case 2:
-            username = parts[0]; password = parts[1]
-        case 3:
-            nickname = parts[0]; username = parts[1]; password = parts[2]
-        default:
-            showHint("格式：昵称:用户名:密码 或 用户名:密码", ok: false); return
-        }
-
-        if let sel = selectedUsername {
-            // 保存所选（可改昵称/用户名/密码）
-            var target = sel
-            if username != sel {
-                if let err = store.rename(sel, to: username) { showHint(err, ok: false); return }
-                target = username
-            }
-            if let err = store.setNickname(username: target, nickname: nickname) {
-                showHint(err, ok: false); return
-            }
-            if let err = store.setPassword(username: target, password: password) {
-                showHint(err, ok: false); return
-            }
-            selectedUsername = target
-            rebuildTags()
-            showHint("已保存「\(target)」", ok: true)
+        if selectedUsername != nil {
+            saveSelected()
         } else {
-            // 无选中 → 新增
-            if let err = store.add(username: username, password: password, nickname: nickname) {
-                showHint(err, ok: false); return
-            }
-            selectedUsername = username
-            rebuildTags()
-            showHint("已新增：\(username)", ok: true)
+            addNewAccount()
         }
     }
 
