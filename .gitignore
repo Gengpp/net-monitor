@@ -60,3 +60,6 @@ release/
 # 系统/编辑器
 .DS_Store
 *.swp
+
+# 图标中间产物（保留源图与 AppIcon.icns）
+icon/AppIcon.iconset/

@@ -24,8 +24,14 @@
 ## 构建与运行
 
 ```bash
-./build.sh                      # 编译 + 打包 .app + ad-hoc 签名
+./build.sh                      # 编译 + 打包 .app + 图标 + ad-hoc 签名
 open NetMonitor.app             # 启动（菜单栏出现 ↓0B ↑0B）
+```
+
+**应用图标**：`icon/AppIcon.icns`（源图 `icon/*.png`，1024px 透明底）。设计为蓝紫渐变 squircle + 白色 ↓↑ 双箭头 + 心电脉冲线。build.sh 会自动复制到 `Contents/Resources/` 并 touch 刷新 Finder/Dock 图标缓存；若本机图标缓存未更新，可执行：
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f NetMonitor.app
 ```
 
 ## 发布打包

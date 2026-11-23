@@ -184,7 +184,7 @@ final class AccountPanelController: NSViewController, NSTableViewDataSource, NST
     private var hintResetWork: DispatchWorkItem?
 
     override func loadView() {
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 470))
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
 
         func label(_ rect: NSRect, _ text: String, size: CGFloat,
                    weight: NSFont.Weight = .regular, color: NSColor = .labelColor) -> NSTextField {
@@ -196,17 +196,15 @@ final class AccountPanelController: NSViewController, NSTableViewDataSource, NST
             return tf
         }
 
-        _ = label(NSRect(x: 24, y: 434, width: 220, height: 16), "账户列表", size: 12, weight: .semibold)
-
-        // 列表
-        let scroll = NSScrollView(frame: NSRect(x: 24, y: 100, width: 220, height: 322))
+        // 左列：账户列表 + 删除
+        let scroll = NSScrollView(frame: NSRect(x: 8, y: 36, width: 140, height: 188))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let table = AccountTableView()
         table.headerView = nil
-        table.rowHeight = 26
+        table.rowHeight = 22
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        col.width = 196
+        col.width = 118
         table.addTableColumn(col)
         table.dataSource = self
         table.delegate = self
@@ -218,49 +216,51 @@ final class AccountPanelController: NSViewController, NSTableViewDataSource, NST
         tableView = table
 
         let delBtn = NSButton(title: "删除所选", target: self, action: #selector(deleteSelected))
-        delBtn.frame = NSRect(x: 24, y: 64, width: 96, height: 26)
+        delBtn.frame = NSRect(x: 8, y: 8, width: 140, height: 22)
         delBtn.bezelStyle = .rounded
         delBtn.controlSize = .small
+        delBtn.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(delBtn)
 
-        // 分隔线
-        let sep = NSBox(frame: NSRect(x: 264, y: 64, width: 1, height: 386))
-        sep.boxType = .separator
-        v.addSubview(sep)
-
-        // 表单
-        _ = label(NSRect(x: 288, y: 404, width: 60, height: 16), "用户名", size: 12)
-        userField = NSTextField(frame: NSRect(x: 352, y: 400, width: 224, height: 24))
-        userField.placeholderString = "新用户名"
+        // 右列：紧凑表单
+        userField = NSTextField(frame: NSRect(x: 158, y: 198, width: 138, height: 22))
+        userField.placeholderString = "用户名"
+        userField.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(userField)
 
-        _ = label(NSRect(x: 288, y: 368, width: 60, height: 16), "密　码", size: 12)
-        passField = NSSecureTextField(frame: NSRect(x: 352, y: 364, width: 224, height: 24))
+        passField = NSSecureTextField(frame: NSRect(x: 158, y: 170, width: 138, height: 22))
         passField.placeholderString = "密码（留空则不改）"
+        passField.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(passField)
 
-        _ = label(NSRect(x: 288, y: 332, width: 60, height: 16), "确认密码", size: 12)
-        confirmField = NSSecureTextField(frame: NSRect(x: 352, y: 328, width: 224, height: 24))
-        confirmField.placeholderString = "再次输入密码"
+        confirmField = NSSecureTextField(frame: NSRect(x: 158, y: 142, width: 138, height: 22))
+        confirmField.placeholderString = "确认密码"
+        confirmField.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(confirmField)
 
-        let addBtn = NSButton(title: "新增账户", target: self, action: #selector(addAccount))
-        addBtn.frame = NSRect(x: 288, y: 288, width: 104, height: 28)
+        let addBtn = NSButton(title: "新增", target: self, action: #selector(addAccount))
+        addBtn.frame = NSRect(x: 158, y: 112, width: 66, height: 24)
         addBtn.bezelStyle = .rounded
+        addBtn.controlSize = .small
+        addBtn.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(addBtn)
 
-        let saveBtn = NSButton(title: "保存修改（所选）", target: self, action: #selector(saveSelected))
-        saveBtn.frame = NSRect(x: 400, y: 288, width: 176, height: 28)
+        let saveBtn = NSButton(title: "保存修改", target: self, action: #selector(saveSelected))
+        saveBtn.frame = NSRect(x: 228, y: 112, width: 68, height: 24)
         saveBtn.bezelStyle = .rounded
+        saveBtn.controlSize = .small
+        saveBtn.font = NSFont.systemFont(ofSize: 11)
         v.addSubview(saveBtn)
 
-        hintLabel = label(NSRect(x: 288, y: 200, width: 288, height: 72), "", size: 11, color: .secondaryLabelColor)
-        hintLabel.maximumNumberOfLines = 4
+        hintLabel = label(NSRect(x: 158, y: 46, width: 138, height: 58), "", size: 10, color: .secondaryLabelColor)
+        hintLabel.maximumNumberOfLines = 5
         hintLabel.lineBreakMode = .byWordWrapping
 
-        _ = label(NSRect(x: 24, y: 28, width: 552, height: 30),
-                  "双击账户行＝复制用户名　·　三击账户行＝复制密码（90 秒后自动清空剪贴板）\n密码以机器绑定 AES-GCM 加密保存在 accounts.json，文件中不含明文",
-                  size: 10, color: .tertiaryLabelColor)
+        let footer = label(NSRect(x: 158, y: 4, width: 138, height: 36),
+                           "双击行＝复制用户名 · 三击行＝复制密码 · 90 秒后清剪贴板",
+                           size: 9, color: .tertiaryLabelColor)
+        footer.lineBreakMode = .byWordWrapping
+        footer.maximumNumberOfLines = 3
 
         view = v
         tableView.reloadData()

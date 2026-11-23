@@ -164,7 +164,7 @@ final class MonitorPanelController: NSViewController {
     required init?(coder: NSCoder) { fatalError("unused") }
 
     override func loadView() {
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 470))
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
 
         func label(_ rect: NSRect, size: CGFloat, weight: NSFont.Weight = .regular,
                    color: NSColor = .labelColor) -> NSTextField {
@@ -176,21 +176,17 @@ final class MonitorPanelController: NSViewController {
             return tf
         }
 
-        let title = label(NSRect(x: 24, y: 436, width: 400, height: 18), size: 12, color: .secondaryLabelColor)
-        title.stringValue = "实时网络流量"
-        title.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        downField = label(NSRect(x: 8, y: 190, width: 140, height: 32), size: 17, weight: .semibold)
+        upField = label(NSRect(x: 156, y: 190, width: 140, height: 32), size: 17, weight: .semibold)
 
-        downField = label(NSRect(x: 24, y: 384, width: 270, height: 42), size: 27, weight: .semibold)
-        upField = label(NSRect(x: 312, y: 384, width: 270, height: 42), size: 27, weight: .semibold)
-
-        chartView = ChartView(frame: NSRect(x: 24, y: 132, width: 552, height: 240))
+        chartView = ChartView(frame: NSRect(x: 8, y: 62, width: 288, height: 122))
         chartView.autoresizingMask = [.width]
         v.addSubview(chartView)
 
-        metaField = label(NSRect(x: 24, y: 108, width: 552, height: 14), size: 11, color: .secondaryLabelColor)
-        totalField = label(NSRect(x: 24, y: 88, width: 552, height: 14), size: 11, color: .secondaryLabelColor)
+        metaField = label(NSRect(x: 8, y: 46, width: 288, height: 12), size: 9, color: .secondaryLabelColor)
+        totalField = label(NSRect(x: 8, y: 30, width: 288, height: 12), size: 9, color: .secondaryLabelColor)
 
-        let hint = label(NSRect(x: 24, y: 52, width: 552, height: 16), size: 10, color: .tertiaryLabelColor)
+        let hint = label(NSRect(x: 8, y: 10, width: 288, height: 12), size: 9, color: .tertiaryLabelColor)
         hint.stringValue = "菜单栏常显速率 · 右键菜单可切换图标模式或复制当前速率"
 
         view = v
@@ -205,13 +201,13 @@ final class MonitorPanelController: NSViewController {
             let a = NSMutableAttributedString(
                 string: "\(arrow) ",
                 attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 27, weight: .semibold),
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 17, weight: .semibold),
                     .foregroundColor: color,
                 ])
             a.append(NSAttributedString(
                 string: value,
                 attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 27, weight: .semibold),
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 17, weight: .semibold),
                     .foregroundColor: NSColor.labelColor,
                 ]))
             return a
@@ -223,13 +219,13 @@ final class MonitorPanelController: NSViewController {
         metaField.attributedStringValue = {
             let a = NSMutableAttributedString(
                 string: "● 下载  ",
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.systemBlue])
+                attributes: [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.systemBlue])
             a.append(NSAttributedString(
                 string: "● 上传  ",
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.systemGreen]))
+                attributes: [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.systemGreen]))
             a.append(NSAttributedString(
-                string: "· \(monitor.interfaceCount) 个活动接口 · 近 120 秒",
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
+                string: "· \(monitor.interfaceCount) 个接口 · 近 120 秒",
+                attributes: [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.secondaryLabelColor]))
             return a
         }()
 
@@ -237,16 +233,26 @@ final class MonitorPanelController: NSViewController {
     }
 }
 
-// MARK: - 主窗口（账户本 + 流量监控）
+// MARK: - 主窗口（账户本 + 流量监控，紧凑尺寸 + 可置顶）
 
 final class MainWindowController: NSWindowController {
     private(set) var segmented: NSSegmentedControl!
+    private(set) var pinButton: NSButton!
     private(set) var accountPanel: AccountPanelController!
     private(set) var monitorPanel: MonitorPanelController!
 
+    /// 置顶状态（持久化）
+    var pinned: Bool {
+        get { UserDefaults.standard.bool(forKey: "nm.pinned") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "nm.pinned")
+            applyPin()
+        }
+    }
+
     convenience init(monitor: NetMonitor) {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 280),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         win.title = "NetMonitor"
         win.isReleasedWhenClosed = false
@@ -256,24 +262,60 @@ final class MainWindowController: NSWindowController {
         accountPanel = AccountPanelController()
         monitorPanel = MonitorPanelController(monitor: monitor)
         buildUI()
+        applyPin()
     }
 
     private func buildUI() {
-        guard let content = window?.contentView else { return }
+        guard let content = window?.contentView, let win = window else { return }
 
         let seg = NSSegmentedControl(labels: ["账户本", "流量监控"], trackingMode: .selectOne, target: self,
                                      action: #selector(segmentChanged))
-        seg.frame = NSRect(x: 20, y: 500, width: 220, height: 26)
+        seg.frame = NSRect(x: 10, y: 246, width: 150, height: 24)
+        seg.font = NSFont.systemFont(ofSize: 11)
         seg.selectedSegment = 0
         content.addSubview(seg)
         segmented = seg
 
+        // 置顶按钮：标题栏右上角的小图标（pin / pin.fill）
+        let pin = NSButton(title: "置顶", target: self, action: #selector(pinTapped))
+        pin.frame = NSRect(x: 0, y: 2, width: 30, height: 22)
+        pin.bezelStyle = .regularSquare
+        pin.isBordered = false
+        pin.imagePosition = .imageOnly
+        pin.controlSize = .small
+        pin.contentTintColor = .secondaryLabelColor
+        pin.toolTip = "置顶窗口"
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = pin
+        accessory.layoutAttribute = .right
+        win.addTitlebarAccessoryViewController(accessory)
+        pinButton = pin
+
         for panel in [accountPanel.view, monitorPanel.view] {
-            panel.frame = NSRect(x: 10, y: 10, width: 600, height: 470)
+            panel.frame = NSRect(x: 8, y: 8, width: 304, height: 232)
             panel.autoresizingMask = [.width]
             content.addSubview(panel)
         }
         monitorPanel.view.isHidden = true
+    }
+
+    private func applyPin() {
+        guard let win = window else { return }
+        if pinned {
+            win.level = .floating                       // 完全置顶
+            win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]  // 跨空间跟随
+        } else {
+            win.level = .normal
+            win.collectionBehavior = []
+        }
+        // 图标随状态切换：钉住=pin.fill（主题色），未钉=pin（灰色）
+        pinButton?.image = NSImage(systemSymbolName: pinned ? "pin.fill" : "pin",
+                                   accessibilityDescription: pinned ? "取消置顶" : "置顶窗口")
+        pinButton?.contentTintColor = pinned ? .controlAccentColor : .secondaryLabelColor
+    }
+
+    @objc private func pinTapped() {
+        pinned.toggle()
     }
 
     @objc private func segmentChanged() {
@@ -399,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAccountTab() { openWindow(tab: 0) }
     @objc private func showMonitorTab() { openWindow(tab: 1) }
+    @objc private func togglePin() { mainWindow.pinned.toggle() }
 
     private func showMenu() {
         let menu = NSMenu()
@@ -410,6 +453,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let monitorItem = NSMenuItem(title: "流量监控", action: #selector(showMonitorTab), keyEquivalent: "")
         monitorItem.target = self
         menu.addItem(monitorItem)
+
+        let pinItem = NSMenuItem(title: mainWindow.pinned ? "取消置顶" : "置顶窗口",
+                                 action: #selector(togglePin), keyEquivalent: "")
+        pinItem.target = self
+        menu.addItem(pinItem)
         menu.addItem(.separator())
 
         let mode = NSMenuItem(
