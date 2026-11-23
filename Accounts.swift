@@ -186,6 +186,8 @@ final class TagButton: NSButton {
 // MARK: - 流式标签布局（宽度不足自动换行）
 
 final class TagFlowView: NSView {
+    override var isFlipped: Bool { true }   // 从上往下排列，阅读顺序与账户顺序一致
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         needsLayout = true
