@@ -209,7 +209,11 @@ final class TagChipView: NSView {
         let lb = NSTextField(labelWithString: text)
         lb.font = NSFont.systemFont(ofSize: 11)
         lb.textColor = colors.text
-        lb.frame = NSRect(x: 9, y: 3, width: textWidth, height: 16)
+        // 文字框比测量值多留 4px，防止末字符抗锯齿边缘被裁；单行不换行不截断
+        lb.lineBreakMode = .byClipping
+        lb.usesSingleLineMode = true
+        lb.isEditable = false
+        lb.frame = NSRect(x: 9, y: 3, width: textWidth + 4, height: 16)
         addSubview(lb)
     }
 
