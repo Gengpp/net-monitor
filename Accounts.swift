@@ -257,6 +257,7 @@ final class AccountPanelController: NSViewController {
         v.addSubview(inputField)
 
         // 操作按钮行：复制 / 新增 / 保存修改
+        @discardableResult
         func smallButton(_ title: String, _ x: CGFloat, _ w: CGFloat, _ sel: Selector) -> NSButton {
             let b = NSButton(title: title, target: self, action: sel)
             b.frame = NSRect(x: x, y: 72, width: w, height: 22)
