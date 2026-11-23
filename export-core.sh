@@ -12,20 +12,21 @@ OUT_PATH="$(dirname "$(pwd)")/$OUT_NAME"
 # 核心代码清单（不含 .app / release / iconset 中间产物）
 CORE_FILES=(main.swift Accounts.swift Info.plist build.sh package.sh export-core.sh \
             .gitignore .last-source-hash docs/README.md icon/AppIcon.icns)
-CORE_SRC=""
-for f in "${CORE_FILES[@]}"; do
-  [ -f "$f" ] && CORE_SRC="$CORE_SRC $f"
-done
-# 图标源图（存在才打包）
 for png in icon/*.png; do
-  [ -f "$png" ] && CORE_SRC="$CORE_SRC $png"
+  [ -f "$png" ] && CORE_FILES+=("$png")
+done
+
+# 仅打包实际存在的文件
+EXISTING=()
+for f in "${CORE_FILES[@]}"; do
+  [ -f "$f" ] && EXISTING+=("$f")
 done
 
 rm -f "$OUT_PATH"
-zip -q -r "$OUT_PATH" $CORE_SRC
+zip -q "$OUT_PATH" "${EXISTING[@]}"
 
 echo "✅ 核心代码已打包：$OUT_PATH"
 echo "   版本：v$VERSION"
 ls -lh "$OUT_PATH" | awk '{print "   大小："$5}'
 echo "   内容："
-unzip -l "$OUT_PATH" | awk 'NR>3 && /目录|files|----/ {next} {print "     - "$4}' | head -20
+unzip -l "$OUT_PATH" | awk 'NR>3 && $4 != "" {print "     - "$4}' | head -20
