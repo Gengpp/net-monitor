@@ -332,6 +332,7 @@ final class AccountPanelController: NSViewController {
         view = v
         rebuildTags()
         if ProcessInfo.processInfo.environment["NM_TEST_COPY"] == "1" { runCopySelfTest() }
+        if ProcessInfo.processInfo.environment["NM_TEST_EDIT"] == "1" { runEditSelfTest() }
     }
 
     // MARK: 标签构建
@@ -577,6 +578,44 @@ final class AccountPanelController: NSViewController {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
                 }
             }
+        }
+    }
+
+    /// NM_TEST_EDIT=1：验证三个输入框的复制/粘贴（模拟 Cmd+A→Cmd+C / Cmd+V 的 first responder 动作链）
+    private func runEditSelfTest() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("paste-测试-123", forType: .string)
+
+        func fieldCopy(_ field: NSTextField) -> String {
+            window?.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+            field.currentEditor()?.copy(nil)
+            return NSPasteboard.general.string(forType: .string) ?? ""
+        }
+        func fieldPaste(_ field: NSTextField) -> String {
+            window?.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+            field.currentEditor()?.paste(nil)
+            return field.stringValue
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // 粘贴：预置剪贴板 → 依次粘贴到三个框
+            let p1 = fieldPaste(self.nickField)
+            let p2 = fieldPaste(self.accField)
+            let p3 = fieldPaste(self.passField)
+            let pasteOK = (p1, p2, p3) == ("paste-测试-123", "paste-测试-123", "paste-测试-123")
+            print("SELFTEST 粘贴: nick[\(p1)] acc[\(p2)] pass[\(p3)] → \(pasteOK ? "PASS" : "FAIL")")
+
+            // 复制：从三个框各复制出来比对
+            let c1 = fieldCopy(self.nickField)
+            let c2 = fieldCopy(self.accField)
+            let c3 = fieldCopy(self.passField)
+            let copyOK = (c1, c2, c3) == ("paste-测试-123", "paste-测试-123", "paste-测试-123")
+            print("SELFTEST 复制: nick[\(c1)] acc[\(c2)] pass[\(c3)] → \(copyOK ? "PASS" : "FAIL")")
+            print("SELFTEST 完成")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
         }
     }
 
