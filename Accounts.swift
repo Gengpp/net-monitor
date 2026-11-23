@@ -227,9 +227,12 @@ final class AccountPanelController: NSViewController {
 
     private let store = AccountStore.shared
     private var flowView: TagFlowView!
-    private var inputField: NSTextField!
+    private var nickField: NSTextField!
+    private var accField: NSTextField!
+    private var passField: NSTextField!
     private var selectedLabel: NSTextField!
     private var hintLabel: NSTextField!
+    private static let helpText = "单击标签＝载入内容（输入框文本可选中复制）· 双击＝复制用户名 · 三击＝复制密码 · ✕＝删除"
     private var pendingLoad: DispatchWorkItem?
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
@@ -239,7 +242,7 @@ final class AccountPanelController: NSViewController {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
 
         // 标签流式区（顶部）
-        let scroll = NSScrollView(frame: NSRect(x: 8, y: 126, width: 288, height: 98))
+        let scroll = NSScrollView(frame: NSRect(x: 8, y: 128, width: 288, height: 96))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let flow = TagFlowView(frame: NSRect(x: 0, y: 0, width: 286, height: 96))
@@ -248,49 +251,50 @@ final class AccountPanelController: NSViewController {
         v.addSubview(scroll)
         flowView = flow
 
-        // 内容输入框（标签下方，可选中复制）
-        inputField = NSTextField(frame: NSRect(x: 8, y: 98, width: 288, height: 22))
-        inputField.placeholderString = "昵称:用户名:密码 或 用户名:密码"
-        inputField.font = NSFont.systemFont(ofSize: 11)
-        inputField.target = self
-        inputField.action = #selector(inputCommitted)
-        v.addSubview(inputField)
+        // 表单（设计稿样式：昵称 / 账户 / 密码 三行输入框）
+        func formRow(_ text: String, _ y: CGFloat, _ placeholder: String) -> NSTextField {
+            let lb = NSTextField(labelWithString: text)
+            lb.frame = NSRect(x: 8, y: y + 3, width: 44, height: 16)
+            lb.font = NSFont.systemFont(ofSize: 11)
+            v.addSubview(lb)
+            let f = NSTextField(frame: NSRect(x: 56, y: y, width: 240, height: 22))
+            f.font = NSFont.systemFont(ofSize: 11)
+            f.placeholderString = placeholder
+            f.target = self
+            f.action = #selector(inputCommitted)
+            v.addSubview(f)
+            return f
+        }
+        nickField = formRow("昵称:", 104, "请输入昵称（可留空）")
+        accField = formRow("账户:", 76, "请输入账户")
+        passField = formRow("密码:", 48, "请输入密码")
 
-        // 操作按钮行：复制 / 新增 / 保存修改
+        // 按钮行
         @discardableResult
         func smallButton(_ title: String, _ x: CGFloat, _ w: CGFloat, _ sel: Selector) -> NSButton {
             let b = NSButton(title: title, target: self, action: sel)
-            b.frame = NSRect(x: x, y: 72, width: w, height: 22)
+            b.frame = NSRect(x: x, y: 16, width: w, height: 26)
             b.bezelStyle = .rounded
-            b.controlSize = .small
             b.font = NSFont.systemFont(ofSize: 11)
             v.addSubview(b)
             return b
         }
-        smallButton("复制", 8, 56, #selector(copyInput))
-        smallButton("新增", 68, 56, #selector(addNewAccount))
-        smallButton("保存修改", 128, 80, #selector(saveSelected))
-        selectedLabel = NSTextField(labelWithString: "")
-        selectedLabel.frame = NSRect(x: 212, y: 76, width: 84, height: 14)
-        selectedLabel.font = NSFont.systemFont(ofSize: 10)
+        smallButton("新增账户", 56, 92, #selector(addNewAccount))
+        smallButton("保存修改", 152, 92, #selector(saveSelected))
+        selectedLabel = NSTextField(labelWithString: "未选中")
+        selectedLabel.frame = NSRect(x: 248, y: 23, width: 48, height: 14)
+        selectedLabel.font = NSFont.systemFont(ofSize: 9)
         selectedLabel.textColor = .secondaryLabelColor
         selectedLabel.lineBreakMode = .byTruncatingTail
         v.addSubview(selectedLabel)
 
-        // 状态提示
-        hintLabel = NSTextField(labelWithString: "")
-        hintLabel.frame = NSRect(x: 8, y: 54, width: 288, height: 16)
-        hintLabel.font = NSFont.systemFont(ofSize: 10)
+        // 提示/帮助（默认显示交互说明，有状态消息时临时替换）
+        hintLabel = NSTextField(labelWithString: Self.helpText)
+        hintLabel.frame = NSRect(x: 8, y: 0, width: 288, height: 14)
+        hintLabel.font = NSFont.systemFont(ofSize: 9)
+        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.lineBreakMode = .byTruncatingTail
         v.addSubview(hintLabel)
-
-        // 交互说明
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let footer = NSTextField(wrappingLabelWithString:
-            "单击标签＝载入内容 · 双击＝复制用户名 · 三击＝复制密码（90 秒后清剪贴板）\n复制＝复制输入框全部内容 · 新增＝按输入框内容新增账户\n保存修改＝更新所选标签 · 标签 ✕＝删除 · v\(ver)")
-        footer.frame = NSRect(x: 8, y: 4, width: 288, height: 46)
-        footer.font = NSFont.systemFont(ofSize: 9)
-        footer.textColor = .tertiaryLabelColor
-        v.addSubview(footer)
 
         view = v
         rebuildTags()
@@ -304,13 +308,15 @@ final class AccountPanelController: NSViewController {
         return acc.username
     }
 
-    /// 输入框展示的账户内容
-    private func contentText(_ acc: Account) -> String {
-        let pwd = store.password(for: acc.username) ?? ""
-        if let n = acc.nickname, !n.isEmpty {
-            return "\(n):\(acc.username):\(pwd)"
-        }
-        return "\(acc.username):\(pwd)"
+    /// 单击标签：载入内容到三个输入框
+    private func loadToInput(name: String) {
+        guard let acc = store.accounts.first(where: { $0.username == name }) else { return }
+        selectedUsername = name
+        rebuildTags()
+        nickField.stringValue = acc.nickname ?? ""
+        accField.stringValue = acc.username
+        passField.stringValue = store.password(for: acc.username) ?? ""
+        showHint("已载入「\(displayName(acc))」，文本可选中复制；点「新增账户」则添加新账户", ok: true)
     }
 
     private func rebuildTags() {
@@ -400,31 +406,14 @@ final class AccountPanelController: NSViewController {
             _ = store.remove(username: name)
             if selectedUsername == name {
                 selectedUsername = nil
-                inputField.stringValue = ""
+                nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
             }
             rebuildTags()
             showHint("已删除：\(name)", ok: true)
         }
     }
 
-    private func loadToInput(name: String) {
-        guard let acc = store.accounts.first(where: { $0.username == name }) else { return }
-        selectedUsername = name
-        rebuildTags()
-        inputField.stringValue = contentText(acc)
-        selectedLabel.stringValue = "选中:\(displayName(acc))"
-        showHint("已载入「\(displayName(acc))」，可选中复制或改后保存；点「新增」则添加新账户", ok: true)
-    }
-
-    // MARK: 输入框按钮
-
-    /// 复制输入框全部内容
-    @objc private func copyInput() {
-        let text = inputField.stringValue
-        guard !text.isEmpty else { showHint("输入框为空，无可复制内容", ok: false); return }
-        writePasteboard(text)
-        showHint("已复制输入框内容", ok: true)
-    }
+    // MARK: 表单按钮
 
     /// 按输入框内容新增账户（不受选中影响）
     @objc private func addNewAccount() {
@@ -461,21 +450,14 @@ final class AccountPanelController: NSViewController {
         showHint("已保存「\(target)」", ok: true)
     }
 
-    /// 解析输入框：昵称:用户名:密码 或 用户名:密码
+    /// 读取三个输入框（昵称可留空）
     private func parseInput() -> (nickname: String?, username: String, password: String, error: String?) {
-        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return (nil, "", "", "输入为空") }
-        let parts = text.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        switch parts.count {
-        case 2:
-            return (nil, parts[0], parts[1], nil)
-        case 3:
-            let nick = parts[0].isEmpty ? nil : parts[0]
-            return (nick, parts[1], parts[2], nil)
-        default:
-            return (nil, "", "", "格式：昵称:用户名:密码 或 用户名:密码")
-        }
+        let nick = nickField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = accField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = passField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty else { return (nil, "", "", "账户不能为空") }
+        guard !password.isEmpty else { return (nil, "", "", "密码不能为空") }
+        return (nick.isEmpty ? nil : nick, username, password, nil)
     }
 
     // MARK: 回车＝有选中则保存，无选中则新增
@@ -549,7 +531,8 @@ final class AccountPanelController: NSViewController {
         hintLabel.stringValue = text
         hintLabel.textColor = ok ? .systemGreen : .systemRed
         let work = DispatchWorkItem { [weak self] in
-            self?.hintLabel.stringValue = ""
+            self?.hintLabel.stringValue = Self.helpText
+            self?.hintLabel.textColor = .tertiaryLabelColor
         }
         hintResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
