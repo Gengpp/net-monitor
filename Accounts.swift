@@ -198,15 +198,15 @@ final class TagChipView: NSView {
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     init(text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
-         selected: Bool, textWidth: CGFloat) {
+         textWidth: CGFloat) {
         super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 18, height: 22))
         wantsLayer = true
         layer?.backgroundColor = colors.bg.cgColor
         layer?.borderColor = colors.border.cgColor
-        layer?.borderWidth = selected ? 2 : 1
+        layer?.borderWidth = 1
         layer?.cornerRadius = 4
         let lb = NSTextField(labelWithString: text)
-        lb.font = NSFont.systemFont(ofSize: 11, weight: selected ? .medium : .regular)
+        lb.font = NSFont.systemFont(ofSize: 11)
         lb.textColor = colors.text
         lb.frame = NSRect(x: 9, y: 3, width: textWidth, height: 16)
         addSubview(lb)
@@ -262,13 +262,10 @@ final class AccountPanelController: NSViewController {
     private var nickField: NSTextField!
     private var accField: NSTextField!
     private var passField: NSTextField!
-    private var selectedLabel: NSTextField!
     private var hintLabel: NSTextField!
-    private static let helpText = "单击标签＝载入内容（输入框文本可选中复制）· 双击＝复制用户名 · 三击＝复制密码 · 右键标签＝删除"
-    private var pendingLoad: DispatchWorkItem?
+    private static let helpText = "双击标签＝复制用户名 · 三击标签＝复制密码 · 右键标签＝删除（修改账户＝删除后重新添加）"
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
-    private var selectedUsername: String?
 
     override func loadView() {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 248))
@@ -312,14 +309,7 @@ final class AccountPanelController: NSViewController {
             v.addSubview(b)
             return b
         }
-        smallButton("新增账户", 56, 92, #selector(addNewAccount))
-        smallButton("保存修改", 152, 92, #selector(saveSelected))
-        selectedLabel = NSTextField(labelWithString: "未选中")
-        selectedLabel.frame = NSRect(x: 248, y: 27, width: 48, height: 14)
-        selectedLabel.font = NSFont.systemFont(ofSize: 9)
-        selectedLabel.textColor = .secondaryLabelColor
-        selectedLabel.lineBreakMode = .byTruncatingTail
-        v.addSubview(selectedLabel)
+        smallButton("新增账户", 106, 92, #selector(addNewAccount))
 
         // 提示/帮助（默认显示交互说明，有状态消息时临时替换）
         hintLabel = NSTextField(labelWithString: Self.helpText)
@@ -340,17 +330,6 @@ final class AccountPanelController: NSViewController {
     private func displayName(_ acc: Account) -> String {
         if let n = acc.nickname, !n.isEmpty { return n }
         return acc.username
-    }
-
-    /// 单击标签：载入内容到三个输入框
-    private func loadToInput(name: String) {
-        guard let acc = store.accounts.first(where: { $0.username == name }) else { return }
-        selectedUsername = name
-        rebuildTags()
-        nickField.stringValue = acc.nickname ?? ""
-        accField.stringValue = acc.username
-        passField.stringValue = store.password(for: acc.username) ?? ""
-        showHint("已载入「\(displayName(acc))」，文本可选中复制；点「新增账户」则添加新账户", ok: true)
     }
 
     /// el-tag 同系配色（底色/边框/文字）
@@ -398,7 +377,6 @@ final class AccountPanelController: NSViewController {
             let chip = TagChipView(
                 text: name,
                 colors: Self.tagPalette[colorIdx[idx]],
-                selected: acc.username == selectedUsername,
                 textWidth: textW)
             chip.onClickCount = { [weak self] clicks in
                 self?.handleTagClick(index: idx, clicks: clicks)
@@ -410,39 +388,30 @@ final class AccountPanelController: NSViewController {
             flowView.addSubview(chip)
         }
         flowView.needsLayout = true
-        if let sel = selectedUsername, let acc = store.accounts.first(where: { $0.username == sel }) {
-            selectedLabel.stringValue = "选中:\(displayName(acc))"
-        } else {
-            selectedLabel.stringValue = "未选中"
-        }
     }
 
-    // MARK: 标签交互（单击载入 / 双击用户名 / 三击密码）
+    // MARK: 标签交互（双击＝复制用户名，三击＝复制密码；单击无动作）
 
     private func handleTagClick(index: Int, clicks: Int) {
         guard index < store.accounts.count else { return }
         let name = store.accounts[index].username
 
         if clicks >= 3 {
-            pendingLoad?.cancel(); pendingCopy?.cancel()
-            pendingLoad = nil; pendingCopy = nil
+            pendingCopy?.cancel()
+            pendingCopy = nil
             copyPassword(name: name)
             return
         }
         if clicks == 2 {
-            pendingLoad?.cancel()
             let w = DispatchWorkItem { [weak self] in self?.copyUsername(name: name) }
             pendingCopy = w
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
             return
         }
-        // 单击：延迟 0.3 秒载入，双击/三击时取消，避免误载入
-        let w = DispatchWorkItem { [weak self] in self?.loadToInput(name: name) }
-        pendingLoad = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
+        // 单击：无动作
     }
 
-    /// 右键标签：直接删除（已屏蔽默认右键菜单），并同步刷新标签与表单状态
+    /// 右键标签：确认后删除（已屏蔽默认右键菜单）
     private func deleteTag(index: Int) {
         guard index < store.accounts.count else { return }
         let acc = store.accounts[index]
@@ -451,7 +420,7 @@ final class AccountPanelController: NSViewController {
         // 确认窗口
         let alert = NSAlert()
         alert.messageText = "删除账户「\(shown)」？"
-        alert.informativeText = "用户名：\(acc.username)\n删除后不可恢复。"
+        alert.informativeText = "用户名：\(acc.username)\n删除后不可恢复；如需修改，请删除后重新添加。"
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
         alert.alertStyle = .warning
@@ -461,50 +430,22 @@ final class AccountPanelController: NSViewController {
         }
 
         _ = store.remove(username: acc.username)
-        if selectedUsername == acc.username {
-            selectedUsername = nil
-            nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
-        }
         rebuildTags()
         showHint("已删除：\(shown)", ok: true)
     }
 
     // MARK: 表单按钮
 
-    /// 按输入框内容新增账户（不受选中影响）
+    /// 按输入框内容新增账户
     @objc private func addNewAccount() {
         let (nickname, username, password, err) = parseInput()
         if let err = err { showHint(err, ok: false); return }
         if let err = store.add(username: username, password: password, nickname: nickname) {
             showHint(err, ok: false); return
         }
-        selectedUsername = nil
         rebuildTags()
         nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
         showHint("已新增：\(username)，输入框已清空", ok: true)
-    }
-
-    /// 保存修改到所选账户
-    @objc private func saveSelected() {
-        guard let sel = selectedUsername else {
-            showHint("请先单击标签选中一个账户，再保存修改", ok: false); return
-        }
-        let (nickname, username, password, err) = parseInput()
-        if let err = err { showHint(err, ok: false); return }
-        var target = sel
-        if username != sel {
-            if let e = store.rename(sel, to: username) { showHint(e, ok: false); return }
-            target = username
-        }
-        if let e = store.setNickname(username: target, nickname: nickname) {
-            showHint(e, ok: false); return
-        }
-        if let e = store.setPassword(username: target, password: password) {
-            showHint(e, ok: false); return
-        }
-        selectedUsername = target
-        rebuildTags()
-        showHint("已保存「\(target)」", ok: true)
     }
 
     /// 读取三个输入框（昵称可留空）
@@ -517,7 +458,7 @@ final class AccountPanelController: NSViewController {
         return (nick.isEmpty ? nil : nick, username, password, nil)
     }
 
-    // MARK: 回车＝有选中则保存，无选中则新增
+    // MARK: 标签复制动作
 
     private func copyUsername(name: String) {
         writePasteboard(name)
@@ -547,11 +488,7 @@ final class AccountPanelController: NSViewController {
     // MARK: 输入框保存/新增
 
     @objc private func inputCommitted() {
-        if selectedUsername != nil {
-            saveSelected()
-        } else {
-            addNewAccount()
-        }
+        addNewAccount()
     }
 
     // MARK: 复制自检（仅 NM_TEST_COPY=1，验证双击/三击时序）
