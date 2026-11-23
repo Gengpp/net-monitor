@@ -588,13 +588,13 @@ final class AccountPanelController: NSViewController {
         NSPasteboard.general.setString("paste-测试-123", forType: .string)
 
         func fieldCopy(_ field: NSTextField) -> String {
-            window?.makeFirstResponder(field)
+            view.window?.makeFirstResponder(field)
             field.currentEditor()?.selectAll(nil)
             field.currentEditor()?.copy(nil)
             return NSPasteboard.general.string(forType: .string) ?? ""
         }
         func fieldPaste(_ field: NSTextField) -> String {
-            window?.makeFirstResponder(field)
+            view.window?.makeFirstResponder(field)
             field.currentEditor()?.selectAll(nil)
             field.currentEditor()?.paste(nil)
             return field.stringValue
