@@ -199,7 +199,8 @@ final class TagChipView: NSView {
 
     init(text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
          textWidth: CGFloat) {
-        super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 18, height: 22))
+        // 左内边距 9px，右内边距 14px（右侧略宽，视觉更平衡）
+        super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 23, height: 22))
         wantsLayer = true
         layer?.backgroundColor = colors.bg.cgColor
         layer?.borderColor = colors.border.cgColor
@@ -384,7 +385,7 @@ final class AccountPanelController: NSViewController {
             chip.onRightClick = { [weak self] in
                 self?.deleteTag(index: idx)
             }
-            chip.frame = NSRect(x: 0, y: 0, width: textW + 18, height: 22)
+            chip.frame = NSRect(x: 0, y: 0, width: textW + 23, height: 22)
             flowView.addSubview(chip)
         }
         flowView.needsLayout = true
