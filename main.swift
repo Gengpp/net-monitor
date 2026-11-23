@@ -270,7 +270,7 @@ final class MainWindowController: NSWindowController {
 
         let seg = NSSegmentedControl(labels: ["账户本", "流量监控"], trackingMode: .selectOne, target: self,
                                      action: #selector(segmentChanged))
-        seg.frame = NSRect(x: 10, y: 262, width: 150, height: 24)
+        seg.frame = NSRect(x: (320 - 150) / 2, y: 262, width: 150, height: 24)  // 水平居中
         seg.font = NSFont.systemFont(ofSize: 11)
         seg.selectedSegment = 0
         content.addSubview(seg)
