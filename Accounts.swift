@@ -8,9 +8,28 @@ import Darwin
 // MARK: - 账户模型与存储
 
 struct Account: Codable {
+    var id: String        // 内部唯一键（与判重无关，供定位/删除/解密使用）
     var username: String
     var secret: String   // base64(AES-GCM 组合格式)，非明文
     var nickname: String? // 显示用昵称，nil/空则回退显示用户名
+
+    init(id: String = UUID().uuidString, username: String, secret: String, nickname: String?) {
+        self.id = id
+        self.username = username
+        self.secret = secret
+        self.nickname = nickname
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, username, secret, nickname }
+
+    // 兼容旧 JSON（无 id 字段）：载入时自动补 UUID
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        username = try c.decode(String.self, forKey: .username)
+        secret = try c.decode(String.self, forKey: .secret)
+        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
+    }
 }
 
 /// 旧版（不可逆哈希）结构，仅用于识别并迁移
@@ -105,28 +124,26 @@ final class AccountStore {
 
     var usernames: [String] { accounts.map(\.username) }
 
-    func exists(_ username: String) -> Bool {
-        accounts.contains { $0.username == username }
+    /// 判重键：昵称非空用昵称，否则用用户名（均 trim 后精确比较）
+    private func dedupKey(_ username: String, nickname: String?) -> String {
+        let n = nickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !n.isEmpty { return n }
+        return username.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 昵称判重（精确匹配，区分大小写；空昵称不参与）
-    func nicknameExists(_ nickname: String) -> Bool {
-        let n = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !n.isEmpty else { return false }
-        return accounts.contains {
-            ($0.nickname ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == n
-        }
+    private func dedupKeyExists(_ key: String) -> Bool {
+        accounts.contains { dedupKey($0.username, nickname: $0.nickname) == key }
     }
 
-    func password(for username: String) -> String? {
-        guard let acc = accounts.first(where: { $0.username == username }) else { return nil }
+    func password(forID id: String) -> String? {
+        guard let acc = accounts.first(where: { $0.id == id }) else { return nil }
         return Self.open(acc.secret)
     }
 
     // MARK: 修改（返回错误提示，nil 表示成功）
 
-    /// 判重规则：昵称非空 → 按昵称判重（重复报「昵称已存在」）；昵称为空 → 按用户名判重。
-    /// username 始终保持唯一（内部主键：复制/解密/删除都以它定位）。
+    /// 判重规则（按用户要求）：昵称非空 → 以昵称判重；昵称为空 → 以用户名判重。
+    /// 用户名允许重复（内部定位使用 id，与判重解耦）。
     @discardableResult
     func add(username: String, password: String, nickname: String? = nil) -> String? {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,14 +153,9 @@ final class AccountStore {
         let nick = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveNick = (nick?.isEmpty == false) ? nick : nil
 
-        if let n = effectiveNick {
-            guard !nicknameExists(n) else { return "昵称「\(n)」已存在" }
-        }
-        // username 唯一性兜底：无论昵称是否参与判重，内部主键都不能撞
-        guard !exists(name) else {
-            return effectiveNick != nil
-                ? "用户名「\(name)」已存在（用户名也需唯一）"
-                : "用户名已存在"
+        let key = dedupKey(name, nickname: effectiveNick)
+        if dedupKeyExists(key) {
+            return effectiveNick != nil ? "昵称「\(key)」已存在" : "用户名「\(key)」已存在"
         }
 
         accounts.append(Account(username: name, secret: Self.seal(password),
@@ -152,54 +164,21 @@ final class AccountStore {
         return nil
     }
 
-    func remove(username: String) -> String? {
-        accounts.removeAll { $0.username == username }
+    func remove(id: String) -> String? {
+        accounts.removeAll { $0.id == id }
         save()
         return nil
     }
 
-    /// 拖动排序：把 username 的账户移到 targetIndex（移除后插入，占据目标位置，其余顺移）
-    func move(username: String, to targetIndex: Int) {
-        guard let src = accounts.firstIndex(where: { $0.username == username }) else { return }
+    /// 拖动排序：把 id 对应账户移到 targetIndex（移除后插入，占据目标位置，其余顺移）
+    func move(id: String, to targetIndex: Int) {
+        guard let src = accounts.firstIndex(where: { $0.id == id }) else { return }
         let item = accounts.remove(at: src)
         let idx = min(max(targetIndex, 0), accounts.count)
         accounts.insert(item, at: idx)
         save()
     }
-
-    func setPassword(username: String, password: String) -> String? {
-        guard !password.isEmpty else { return "密码不能为空" }
-        guard let idx = accounts.firstIndex(where: { $0.username == username }) else {
-            return "账户不存在"
-        }
-        accounts[idx].secret = Self.seal(password)
-        save()
-        return nil
-    }
-
-    /// 昵传空串/nil 表示清除昵称（回退显示用户名）
-    @discardableResult
-    func setNickname(username: String, nickname: String?) -> String? {
-        guard let idx = accounts.firstIndex(where: { $0.username == username }) else {
-            return "账户不存在"
-        }
-        let nick = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
-        accounts[idx].nickname = (nick?.isEmpty == false) ? nick : nil
-        save()
-        return nil
-    }
-
-    func rename(_ old: String, to new: String) -> String? {
-        let name = new.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return "用户名不能为空" }
-        guard !name.contains(" ") else { return "用户名不能包含空格" }
-        guard name != old else { return nil }
-        guard !exists(name) else { return "用户名已存在" }
-        guard let idx = accounts.firstIndex(where: { $0.username == old }) else { return "账户不存在" }
-        accounts[idx].username = name
-        save()
-        return nil
-    }
+    // 注：账户信息不可就地修改（改账户＝删除后重新添加），故不提供 setPassword/setNickname/rename
 }
 
 // MARK: - el-tag 风格彩色标签
@@ -217,9 +196,9 @@ final class TagChipView: NSView {
     var onClickCount: ((Int) -> Void)?
     var onRightClick: (() -> Void)?
 
-    /// 拖动排序回调：参数为（该标签的用户名，窗口坐标系下的当前鼠标位置）
+    /// 拖动排序回调：参数为（该标签的账户 id，窗口坐标系下的当前鼠标位置）
     var onDragReorder: ((String, NSPoint) -> Void)?
-    let usernameKey: String
+    let accountID: String
 
     override func mouseDown(with event: NSEvent) {
         // 本地事件循环：区分「点击」与「拖动」（位移超 4px 视为拖动）
@@ -231,7 +210,7 @@ final class TagChipView: NSView {
             if e.type == .leftMouseDragged {
                 let p = e.locationInWindow
                 if !dragged, abs(p.x - start.x) > 4 || abs(p.y - start.y) > 4 { dragged = true }
-                if dragged { onDragReorder?(usernameKey, p) }
+                if dragged { onDragReorder?(accountID, p) }
             } else {
                 break
             }
@@ -246,9 +225,9 @@ final class TagChipView: NSView {
     /// 阻止默认右键菜单
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
-    init(usernameKey: String, text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
+    init(accountID: String, text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
          textWidth: CGFloat) {
-        self.usernameKey = usernameKey
+        self.accountID = accountID
         // 左内边距 9px，右内边距 14px（右侧略宽，视觉更平衡）
         super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 23, height: 22))
         wantsLayer = true
@@ -431,7 +410,7 @@ final class AccountPanelController: NSViewController {
             let name = displayName(acc)
             let textW = ceil((name as NSString).size(withAttributes: para).width)
             let chip = TagChipView(
-                usernameKey: acc.username,
+                accountID: acc.id,
                 text: name,
                 colors: Self.tagPalette[colorIdx[idx]],
                 textWidth: textW)
@@ -441,8 +420,8 @@ final class AccountPanelController: NSViewController {
             chip.onRightClick = { [weak self] in
                 self?.deleteTag(index: idx)
             }
-            chip.onDragReorder = { [weak self] username, pointInWindow in
-                self?.handleDragReorder(username: username, pointInWindow: pointInWindow)
+            chip.onDragReorder = { [weak self] accountID, pointInWindow in
+                self?.handleDragReorder(accountID: accountID, pointInWindow: pointInWindow)
             }
             chip.frame = NSRect(x: 0, y: 0, width: textW + 23, height: 22)
             flowView.addSubview(chip)
@@ -454,16 +433,17 @@ final class AccountPanelController: NSViewController {
 
     private func handleTagClick(index: Int, clicks: Int) {
         guard index < store.accounts.count else { return }
-        let name = store.accounts[index].username
+        let acc = store.accounts[index]
 
         if clicks >= 3 {
             pendingCopy?.cancel()
             pendingCopy = nil
-            copyPassword(name: name)
+            copyPassword(id: acc.id, shown: displayName(acc))
             return
         }
         if clicks == 2 {
-            let w = DispatchWorkItem { [weak self] in self?.copyUsername(name: name) }
+            let username = acc.username
+            let w = DispatchWorkItem { [weak self] in self?.copyUsername(name: username) }
             pendingCopy = w
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
             return
@@ -474,15 +454,15 @@ final class AccountPanelController: NSViewController {
     // MARK: 拖动排序
 
     /// 鼠标拖到哪个标签上，就把被拖账户移到那个位置（实时换位，松手即持久化）
-    private func handleDragReorder(username: String, pointInWindow: NSPoint) {
+    private func handleDragReorder(accountID: String, pointInWindow: NSPoint) {
         let p = flowView.convert(pointInWindow, from: nil)
         guard let targetIdx = flowView.subviews.firstIndex(where: {
-            ($0 as? TagChipView)?.usernameKey != username && $0.frame.contains(p)
+            ($0 as? TagChipView)?.accountID != accountID && $0.frame.contains(p)
         }) else { return }
         // 位置没变就不动
-        guard let srcIdx = store.accounts.firstIndex(where: { $0.username == username }),
+        guard let srcIdx = store.accounts.firstIndex(where: { $0.id == accountID }),
               srcIdx != targetIdx else { return }
-        store.move(username: username, to: targetIdx)
+        store.move(id: accountID, to: targetIdx)
         rebuildTags()
     }
 
@@ -504,7 +484,7 @@ final class AccountPanelController: NSViewController {
             return
         }
 
-        _ = store.remove(username: acc.username)
+        _ = store.remove(id: acc.id)
         rebuildTags()
         showHint("已删除：\(shown)", ok: true)
     }
@@ -546,13 +526,13 @@ final class AccountPanelController: NSViewController {
         showHint("已复制用户名：\(name)", ok: true)
     }
 
-    private func copyPassword(name: String) {
-        guard let pwd = store.password(for: name), !pwd.isEmpty else {
-            showHint("「\(name)」的密码无法解密，请重新设置", ok: false)
+    private func copyPassword(id: String, shown: String) {
+        guard let pwd = store.password(forID: id), !pwd.isEmpty else {
+            showHint("「\(shown)」的密码无法解密，请重新设置", ok: false)
             return
         }
         writePasteboard(pwd)
-        showHint("已复制「\(name)」的密码", ok: true)
+        showHint("已复制「\(shown)」的密码", ok: true)
         // 90 秒后自动清空（若剪贴板仍是这段密码）
         DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
             if NSPasteboard.general.string(forType: .string) == pwd {
@@ -590,7 +570,7 @@ final class AccountPanelController: NSViewController {
                 self.handleTagClick(index: 0, clicks: 3)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     let v2 = NSPasteboard.general.string(forType: .string) ?? "nil"
-                    let expect = self.store.password(for: self.store.accounts[0].username) ?? "nil"
+                    let expect = self.store.password(forID: self.store.accounts[0].id) ?? "nil"
                     print("SELFTEST 三击结果: [\(v2)]  期望密码 → \(v2 == expect ? "PASS" : "FAIL")")
                     print("SELFTEST 完成")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
