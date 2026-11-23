@@ -1,5 +1,5 @@
-// Accounts.swift — 账户存储（机器绑定 AES-GCM 加密）+ 账户列表面板
-// 支持双击复制用户名、三击复制密码
+// Accounts.swift — 账户存储（机器绑定 AES-GCM 加密）+ 账户标签面板（流式 Tag 布局）
+// 交互：单击标签＝载入内容到输入框（可选中复制）· 双击＝复制用户名 · 三击＝复制密码 · ✕＝删除
 
 import AppKit
 import CryptoKit
@@ -10,6 +10,7 @@ import Darwin
 struct Account: Codable {
     var username: String
     var secret: String   // base64(AES-GCM 组合格式)，非明文
+    var nickname: String? // 显示用昵称，nil/空则回退显示用户名
 }
 
 /// 旧版（不可逆哈希）结构，仅用于识别并迁移
@@ -114,13 +115,15 @@ final class AccountStore {
     // MARK: 修改（返回错误提示，nil 表示成功）
 
     @discardableResult
-    func add(username: String, password: String) -> String? {
+    func add(username: String, password: String, nickname: String? = nil) -> String? {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return "用户名不能为空" }
         guard !name.contains(" ") else { return "用户名不能包含空格" }
         guard !exists(name) else { return "用户名已存在" }
         guard !password.isEmpty else { return "密码不能为空" }
-        accounts.append(Account(username: name, secret: Self.seal(password)))
+        let nick = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
+        accounts.append(Account(username: name, secret: Self.seal(password),
+                                nickname: (nick?.isEmpty == false) ? nick : nil))
         save()
         return nil
     }
@@ -141,6 +144,18 @@ final class AccountStore {
         return nil
     }
 
+    /// 昵传空串/nil 表示清除昵称（回退显示用户名）
+    @discardableResult
+    func setNickname(username: String, nickname: String?) -> String? {
+        guard let idx = accounts.firstIndex(where: { $0.username == username }) else {
+            return "账户不存在"
+        }
+        let nick = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
+        accounts[idx].nickname = (nick?.isEmpty == false) ? nick : nil
+        save()
+        return nil
+    }
+
     func rename(_ old: String, to new: String) -> String? {
         let name = new.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return "用户名不能为空" }
@@ -154,214 +169,234 @@ final class AccountStore {
     }
 }
 
-// MARK: - 支持多击事件的表格
+// MARK: - 支持多击事件的标签按钮
 
-final class AccountTableView: NSTableView {
-    /// (行号, 点击次数)
-    var onRowClick: ((Int, Int) -> Void)?
+final class TagButton: NSButton {
+    /// (点击次数)
+    var onCountedClick: ((Int) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        let clickedRow = row(at: point)
         super.mouseDown(with: event)
-        if clickedRow >= 0 {
-            onRowClick?(clickedRow, event.clickCount)
+        onCountedClick?(event.clickCount)
+    }
+}
+
+// MARK: - 流式标签布局（宽度不足自动换行）
+
+final class TagFlowView: NSView {
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let maxW = bounds.width
+        let gap: CGFloat = 6
+        var x: CGFloat = gap
+        var y: CGFloat = gap
+        var rowH: CGFloat = 0
+        for sub in subviews {
+            let w = sub.frame.width, h = sub.frame.height
+            if x + w > maxW - gap && x > gap {   // 放不下则换行
+                x = gap
+                y += rowH + gap
+                rowH = 0
+            }
+            sub.frame.origin = NSPoint(x: x, y: y)
+            x += w + gap
+            rowH = max(rowH, h)
+        }
+        // 文档高度随内容/换行变化，供滚动
+        let minH = enclosingScrollView?.contentSize.height ?? 0
+        let contentH = (subviews.isEmpty ? 0 : y + rowH + gap) + gap
+        let newH = max(contentH, minH)
+        if abs(frame.height - newH) > 0.5 {
+            frame.size.height = newH
         }
     }
 }
 
-// MARK: - 账户面板
+// MARK: - 账户面板（标签 + 内容输入框）
 
-final class AccountPanelController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+final class AccountPanelController: NSViewController {
 
     private let store = AccountStore.shared
-    private var tableView: AccountTableView!
-    private var userField: NSTextField!
-    private var passField: NSSecureTextField!
-    private var confirmField: NSSecureTextField!
+    private var flowView: TagFlowView!
+    private var inputField: NSTextField!
     private var hintLabel: NSTextField!
+    private var pendingLoad: DispatchWorkItem?
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
+    private var selectedUsername: String?
 
     override func loadView() {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
 
-        func label(_ rect: NSRect, _ text: String, size: CGFloat,
-                   weight: NSFont.Weight = .regular, color: NSColor = .labelColor) -> NSTextField {
-            let tf = NSTextField(labelWithString: text)
-            tf.frame = rect
-            tf.font = NSFont.systemFont(ofSize: size, weight: weight)
-            tf.textColor = color
-            v.addSubview(tf)
-            return tf
-        }
-
-        // 左列：账户列表 + 删除
-        let scroll = NSScrollView(frame: NSRect(x: 8, y: 36, width: 140, height: 188))
+        // 标签流式区（顶部）
+        let scroll = NSScrollView(frame: NSRect(x: 8, y: 126, width: 288, height: 98))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
-        let table = AccountTableView()
-        table.headerView = nil
-        table.rowHeight = 22
-        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        col.width = 118
-        table.addTableColumn(col)
-        table.dataSource = self
-        table.delegate = self
-        table.onRowClick = { [weak self] row, clicks in
-            self?.handleRowClick(row: row, clicks: clicks)
-        }
-        scroll.documentView = table
+        let flow = TagFlowView(frame: NSRect(x: 0, y: 0, width: 286, height: 96))
+        flow.autoresizingMask = [.width]
+        scroll.documentView = flow
         v.addSubview(scroll)
-        tableView = table
+        flowView = flow
 
-        let delBtn = NSButton(title: "删除所选", target: self, action: #selector(deleteSelected))
-        delBtn.frame = NSRect(x: 8, y: 8, width: 140, height: 22)
-        delBtn.bezelStyle = .rounded
-        delBtn.controlSize = .small
-        delBtn.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(delBtn)
+        // 内容输入框（标签下方，可选中复制）
+        inputField = NSTextField(frame: NSRect(x: 8, y: 98, width: 288, height: 22))
+        inputField.placeholderString = "昵称:用户名:密码 或 用户名:密码（回车保存/新增）"
+        inputField.font = NSFont.systemFont(ofSize: 11)
+        inputField.target = self
+        inputField.action = #selector(inputCommitted)
+        v.addSubview(inputField)
 
-        // 右列：紧凑表单
-        userField = NSTextField(frame: NSRect(x: 158, y: 198, width: 138, height: 22))
-        userField.placeholderString = "用户名"
-        userField.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(userField)
+        // 状态提示
+        hintLabel = NSTextField(labelWithString: "")
+        hintLabel.frame = NSRect(x: 8, y: 78, width: 288, height: 16)
+        hintLabel.font = NSFont.systemFont(ofSize: 10)
+        v.addSubview(hintLabel)
 
-        passField = NSSecureTextField(frame: NSRect(x: 158, y: 170, width: 138, height: 22))
-        passField.placeholderString = "密码（留空则不改）"
-        passField.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(passField)
-
-        confirmField = NSSecureTextField(frame: NSRect(x: 158, y: 142, width: 138, height: 22))
-        confirmField.placeholderString = "确认密码"
-        confirmField.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(confirmField)
-
-        let addBtn = NSButton(title: "新增", target: self, action: #selector(addAccount))
-        addBtn.frame = NSRect(x: 158, y: 112, width: 66, height: 24)
-        addBtn.bezelStyle = .rounded
-        addBtn.controlSize = .small
-        addBtn.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(addBtn)
-
-        let saveBtn = NSButton(title: "保存修改", target: self, action: #selector(saveSelected))
-        saveBtn.frame = NSRect(x: 228, y: 112, width: 68, height: 24)
-        saveBtn.bezelStyle = .rounded
-        saveBtn.controlSize = .small
-        saveBtn.font = NSFont.systemFont(ofSize: 11)
-        v.addSubview(saveBtn)
-
-        hintLabel = label(NSRect(x: 158, y: 46, width: 138, height: 58), "", size: 10, color: .secondaryLabelColor)
-        hintLabel.maximumNumberOfLines = 5
-        hintLabel.lineBreakMode = .byWordWrapping
-
-        let footer = label(NSRect(x: 158, y: 4, width: 138, height: 36),
-                           "双击行＝复制用户名 · 三击行＝复制密码 · 90 秒后清剪贴板",
-                           size: 9, color: .tertiaryLabelColor)
-        footer.lineBreakMode = .byWordWrapping
-        footer.maximumNumberOfLines = 3
+        // 交互说明
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let footer = NSTextField(wrappingLabelWithString:
+            "单击标签＝载入内容（输入框内可选中复制）· 双击＝复制用户名 · 三击＝复制密码（90 秒后清剪贴板）\n标签 ✕＝删除 · 输入后回车＝保存所选 / 无选中则新增 · v\(ver)")
+        footer.frame = NSRect(x: 8, y: 4, width: 288, height: 70)
+        footer.font = NSFont.systemFont(ofSize: 9)
+        footer.textColor = .tertiaryLabelColor
+        v.addSubview(footer)
 
         view = v
-        tableView.reloadData()
-        if !store.accounts.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        }
+        rebuildTags()
         if ProcessInfo.processInfo.environment["NM_TEST_COPY"] == "1" { runCopySelfTest() }
     }
 
-    // MARK: 复制自检（仅 NM_TEST_COPY=1 时执行，用于验证双击/三击时序）
-    private func runCopySelfTest() {
-        guard !store.accounts.isEmpty else { print("SELFTEST: 无账户"); return }
-        print("SELFTEST: 账户数 \(store.accounts.count)，首行 \(store.accounts[0].username)")
+    // MARK: 标签构建
 
-        // 双击 → 应复制用户名
-        handleRowClick(row: 0, clicks: 2)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let v1 = NSPasteboard.general.string(forType: .string) ?? "nil"
-            print("SELFTEST 双击结果: [\(v1)]  期望用户名 → \(v1 == self.store.accounts[0].username ? "PASS" : "FAIL")")
+    private func displayName(_ acc: Account) -> String {
+        if let n = acc.nickname, !n.isEmpty { return n }
+        return acc.username
+    }
 
-            // 三击 → 应复制密码（并取消待执行的双击动作）
-            self.handleRowClick(row: 0, clicks: 2)   // 先制造待执行双击
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                self.handleRowClick(row: 0, clicks: 3)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    let v2 = NSPasteboard.general.string(forType: .string) ?? "nil"
-                    let expect = self.store.password(for: self.store.accounts[0].username) ?? "nil"
-                    print("SELFTEST 三击结果: [\(v2)]  期望密码 → \(v2 == expect ? "PASS" : "FAIL")")
-                    print("SELFTEST 完成")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
-                }
+    /// 输入框展示的账户内容
+    private func contentText(_ acc: Account) -> String {
+        let pwd = store.password(for: acc.username) ?? ""
+        if let n = acc.nickname, !n.isEmpty {
+            return "\(n):\(acc.username):\(pwd)"
+        }
+        return "\(acc.username):\(pwd)"
+    }
+
+    private func rebuildTags() {
+        flowView.subviews.forEach { $0.removeFromSuperview() }
+        let font = NSFont.systemFont(ofSize: 11)
+        let para: [NSAttributedString.Key: Any] = [.font: font]
+
+        for (idx, acc) in store.accounts.enumerated() {
+            let name = displayName(acc)
+            let container = NSView()
+
+            let btn = TagButton(title: name, target: self, action: #selector(tagMainClicked(_:)))
+            btn.font = font
+            btn.bezelStyle = .rounded
+            btn.controlSize = .small
+            btn.lineBreakMode = .byTruncatingTail
+            if acc.username == selectedUsername {
+                btn.attributedTitle = NSAttributedString(
+                    string: name,
+                    attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                                 .foregroundColor: NSColor.controlAccentColor])
             }
+            btn.onCountedClick = { [weak self] clicks in
+                self?.handleTagClick(index: idx, clicks: clicks)
+            }
+            let nameW = ceil((name as NSString).size(withAttributes: para).width) + 18
+            btn.frame = NSRect(x: 0, y: 0, width: nameW, height: 20)
+            container.addSubview(btn)
+
+            let del = NSButton(title: "✕", target: self, action: #selector(tagDeleteClicked(_:)))
+            del.isBordered = false
+            del.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+            del.controlSize = .small
+            del.frame = NSRect(x: nameW, y: 3, width: 14, height: 14)
+            container.addSubview(del)
+
+            container.frame = NSRect(x: 0, y: 0, width: nameW + 14, height: 20)
+            flowView.addSubview(container)
         }
+        flowView.needsLayout = true
     }
 
-    // MARK: 表格
+    // MARK: 标签交互（单击载入 / 双击用户名 / 三击密码）
 
-    func numberOfRows(in tableView: NSTableView) -> Int { store.accounts.count }
+    private func handleTagClick(index: Int, clicks: Int) {
+        guard index < store.accounts.count else { return }
+        let name = store.accounts[index].username
 
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < store.accounts.count else { return nil }
-        let id = NSUserInterfaceItemIdentifier("cell")
-        let cell: NSTableCellView
-        if let reused = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView {
-            cell = reused
-        } else {
-            cell = NSTableCellView()
-            cell.identifier = id
-            let tf = NSTextField(labelWithString: "")
-            tf.frame = NSRect(x: 8, y: 3, width: 190, height: 18)
-            tf.font = NSFont.systemFont(ofSize: 13)
-            cell.addSubview(tf)
-            cell.textField = tf
-        }
-        cell.textField?.stringValue = store.accounts[row].username
-        return cell
-    }
-
-    private var selectedUsername: String? {
-        let row = tableView.selectedRow
-        guard row >= 0, row < store.accounts.count else { return nil }
-        return store.accounts[row].username
-    }
-
-    // MARK: 复制交互
-
-    private func handleRowClick(row: Int, clicks: Int) {
-        guard row < store.accounts.count else { return }
         if clicks >= 3 {
-            pendingCopy?.cancel()
-            pendingCopy = nil
-            copyPassword(row: row)
+            pendingLoad?.cancel(); pendingCopy?.cancel()
+            pendingLoad = nil; pendingCopy = nil
+            copyPassword(name: name)
             return
         }
         if clicks == 2 {
-            // 延迟 0.3 秒等三击判定，避免双击与三击互相干扰
-            let work = DispatchWorkItem { [weak self] in
-                self?.copyUsername(row: row)
+            pendingLoad?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.copyUsername(name: name) }
+            pendingCopy = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
+            return
+        }
+        // 单击：延迟 0.3 秒载入，双击/三击时取消，避免误载入
+        let w = DispatchWorkItem { [weak self] in self?.loadToInput(name: name) }
+        pendingLoad = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
+    }
+
+    @objc private func tagMainClicked(_ sender: NSButton) {
+        // 点击逻辑统一走 onCountedClick（带 clickCount）
+    }
+
+    @objc private func tagDeleteClicked(_ sender: NSButton) {
+        let idx = sender.tag
+        guard idx < store.accounts.count else { return }
+        let name = store.accounts[idx].username
+        let alert = NSAlert()
+        alert.messageText = "删除账户「\(displayName(store.accounts[idx]))」？"
+        alert.informativeText = "用户名：\(name)\n删除后不可恢复。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        if alert.runModal() == .alertFirstButtonReturn {
+            _ = store.remove(username: name)
+            if selectedUsername == name {
+                selectedUsername = nil
+                inputField.stringValue = ""
             }
-            pendingCopy = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: work)
+            rebuildTags()
+            showHint("已删除：\(name)", ok: true)
         }
     }
 
-    private func copyUsername(row: Int) {
-        let name = store.accounts[row].username
-        writePasteboard(name)
-        showHint("已复制用户名：\(name)", ok: true)
-        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    private func loadToInput(name: String) {
+        guard let acc = store.accounts.first(where: { $0.username == name }) else { return }
+        selectedUsername = name
+        rebuildTags()
+        inputField.stringValue = contentText(acc)
+        showHint("已载入「\(displayName(acc))」，输入框内可选中复制", ok: true)
     }
 
-    private func copyPassword(row: Int) {
-        let name = store.accounts[row].username
+    private func copyUsername(name: String) {
+        writePasteboard(name)
+        showHint("已复制用户名：\(name)", ok: true)
+    }
+
+    private func copyPassword(name: String) {
         guard let pwd = store.password(for: name), !pwd.isEmpty else {
             showHint("「\(name)」的密码无法解密，请重新设置", ok: false)
             return
         }
         writePasteboard(pwd)
         showHint("已复制「\(name)」的密码", ok: true)
-        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-
         // 90 秒后自动清空（若剪贴板仍是这段密码）
         DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
             if NSPasteboard.general.string(forType: .string) == pwd {
@@ -375,6 +410,82 @@ final class AccountPanelController: NSViewController, NSTableViewDataSource, NST
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    // MARK: 输入框保存/新增
+
+    @objc private func inputCommitted() {
+        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { showHint("输入为空", ok: false); return }
+
+        let parts = text.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        var nickname: String? = nil
+        var username: String
+        var password: String
+        switch parts.count {
+        case 2:
+            username = parts[0]; password = parts[1]
+        case 3:
+            nickname = parts[0]; username = parts[1]; password = parts[2]
+        default:
+            showHint("格式：昵称:用户名:密码 或 用户名:密码", ok: false); return
+        }
+
+        if let sel = selectedUsername {
+            // 保存所选（可改昵称/用户名/密码）
+            var target = sel
+            if username != sel {
+                if let err = store.rename(sel, to: username) { showHint(err, ok: false); return }
+                target = username
+            }
+            if let err = store.setNickname(username: target, nickname: nickname) {
+                showHint(err, ok: false); return
+            }
+            if let err = store.setPassword(username: target, password: password) {
+                showHint(err, ok: false); return
+            }
+            selectedUsername = target
+            rebuildTags()
+            showHint("已保存「\(target)」", ok: true)
+        } else {
+            // 无选中 → 新增
+            if let err = store.add(username: username, password: password, nickname: nickname) {
+                showHint(err, ok: false); return
+            }
+            selectedUsername = username
+            rebuildTags()
+            showHint("已新增：\(username)", ok: true)
+        }
+    }
+
+    // MARK: 复制自检（仅 NM_TEST_COPY=1，验证双击/三击时序）
+
+    private func runCopySelfTest() {
+        guard !store.accounts.isEmpty else { print("SELFTEST: 无账户"); return }
+        print("SELFTEST: 账户数 \(store.accounts.count)，首个 \(store.accounts[0].username)")
+
+        // 双击 → 应复制用户名
+        handleTagClick(index: 0, clicks: 2)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let v1 = NSPasteboard.general.string(forType: .string) ?? "nil"
+            print("SELFTEST 双击结果: [\(v1)]  期望用户名 → \(v1 == self.store.accounts[0].username ? "PASS" : "FAIL")")
+
+            // 三击 → 应复制密码（并取消待执行的双击动作）
+            self.handleTagClick(index: 0, clicks: 2)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self.handleTagClick(index: 0, clicks: 3)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    let v2 = NSPasteboard.general.string(forType: .string) ?? "nil"
+                    let expect = self.store.password(for: self.store.accounts[0].username) ?? "nil"
+                    print("SELFTEST 三击结果: [\(v2)]  期望密码 → \(v2 == expect ? "PASS" : "FAIL")")
+                    print("SELFTEST 完成")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
+                }
+            }
+        }
+    }
+
+    // MARK: 状态提示
+
     private func showHint(_ text: String, ok: Bool) {
         hintResetWork?.cancel()
         hintLabel.stringValue = text
@@ -384,69 +495,5 @@ final class AccountPanelController: NSViewController, NSTableViewDataSource, NST
         }
         hintResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
-    }
-
-    // MARK: 行为
-
-    @objc private func addAccount() {
-        guard passField.stringValue == confirmField.stringValue else {
-            showHint("两次输入的密码不一致", ok: false); return
-        }
-        if let err = store.add(username: userField.stringValue, password: passField.stringValue) {
-            showHint(err, ok: false); return
-        }
-        let name = userField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        userField.stringValue = ""; passField.stringValue = ""; confirmField.stringValue = ""
-        tableView.reloadData()
-        if let idx = store.usernames.firstIndex(of: name) {
-            tableView.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
-        }
-        showHint("已新增账户：\(name)", ok: true)
-    }
-
-    @objc private func saveSelected() {
-        guard let name = selectedUsername else {
-            showHint("请先在左侧选择一个账户", ok: false); return
-        }
-        guard passField.stringValue == confirmField.stringValue else {
-            showHint("两次输入的密码不一致", ok: false); return
-        }
-        let newName = userField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !newName.isEmpty, newName != name {
-            if let err = store.rename(name, to: newName) {
-                showHint(err, ok: false); return
-            }
-        }
-        let target = newName.isEmpty ? name : newName
-        var changed = ["用户名"]
-        if !passField.stringValue.isEmpty {
-            if let err = store.setPassword(username: target, password: passField.stringValue) {
-                showHint(err, ok: false); return
-            }
-            changed.append("密码")
-        }
-        passField.stringValue = ""; confirmField.stringValue = ""
-        tableView.reloadData()
-        if let idx = store.usernames.firstIndex(of: target) {
-            tableView.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
-        }
-        showHint("已保存「\(target)」的\(changed.joined(separator: "与"))", ok: true)
-    }
-
-    @objc private func deleteSelected() {
-        guard let name = selectedUsername else {
-            showHint("请先在左侧选择一个账户", ok: false); return
-        }
-        let alert = NSAlert()
-        alert.messageText = "删除账户「\(name)」？"
-        alert.informativeText = "删除后不可恢复。"
-        alert.addButton(withTitle: "删除")
-        alert.addButton(withTitle: "取消")
-        alert.alertStyle = .warning
-        if alert.runModal() == .alertFirstButtonReturn {
-            _ = store.remove(username: name)
-            tableView.reloadData()
-            showHint("已删除账户：\(name)", ok: true)
-        }
     }
 }
