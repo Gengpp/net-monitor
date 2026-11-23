@@ -445,6 +445,19 @@ final class AccountPanelController: NSViewController {
         guard index < store.accounts.count else { return }
         let acc = store.accounts[index]
         let shown = displayName(acc)
+
+        // 确认窗口
+        let alert = NSAlert()
+        alert.messageText = "删除账户「\(shown)」？"
+        alert.informativeText = "用户名：\(acc.username)\n删除后不可恢复。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            showHint("已取消删除", ok: true)
+            return
+        }
+
         _ = store.remove(username: acc.username)
         if selectedUsername == acc.username {
             selectedUsername = nil
