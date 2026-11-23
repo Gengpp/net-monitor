@@ -32,6 +32,8 @@ final class AccountStore {
         let base: URL
         if let d = directory {
             base = d
+        } else if let envDir = ProcessInfo.processInfo.environment["NM_STORE_DIR"], !envDir.isEmpty {
+            base = URL(fileURLWithPath: envDir)   // 测试钩子：指定存储目录
         } else {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             base = appSupport.appendingPathComponent("NetMonitor", isDirectory: true)
@@ -290,7 +292,6 @@ final class AccountPanelController: NSViewController {
     private func rebuildTags() {
         flowView.subviews.forEach { $0.removeFromSuperview() }
         let font = NSFont.systemFont(ofSize: 11)
-        let para: [NSAttributedString.Key: Any] = [.font: font]
 
         for (idx, acc) in store.accounts.enumerated() {
             let name = displayName(acc)
@@ -310,7 +311,7 @@ final class AccountPanelController: NSViewController {
             btn.onCountedClick = { [weak self] clicks in
                 self?.handleTagClick(index: idx, clicks: clicks)
             }
-            let nameW = ceil((name as NSString).size(withAttributes: para).width) + 18
+            let nameW = max(ceil(btn.intrinsicContentSize.width) + 4, 40)
             btn.frame = NSRect(x: 0, y: 0, width: nameW, height: 20)
             container.addSubview(btn)
 
