@@ -351,8 +351,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "nm.displayMode") }
     }
 
+    /// 菜单栏 App 没有主菜单时，输入框的 Cmd+C/Cmd+V/Cmd+X/Cmd+A 快捷键会失效
+    /// （按键等价通过主菜单分发）。补一个标准 Edit 菜单指向 first responder，
+    /// 让三个输入框（以及一切文本域）都支持复制/粘贴/剪切/全选。
+    private func setupEditMenu() {
+        let mainMenu = NSMenu()
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "编辑")
+
+        func item(_ title: String, _ action: Selector, _ key: String) {
+            let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            mi.target = nil  // nil = first responder 链
+            editMenu.addItem(mi)
+        }
+        item("撤销", Selector(("undo:")), "z")
+        item("重做", Selector(("redo:")), "Z")
+        editMenu.addItem(.separator())
+        item("剪切", #selector(NSText.cut(_:)), "x")
+        item("拷贝", #selector(NSText.copy(_:)), "c")
+        item("粘贴", #selector(NSText.paste(_:)), "v")
+        item("全选", #selector(NSText.selectAll(_:)), "a")
+
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        setupEditMenu()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
