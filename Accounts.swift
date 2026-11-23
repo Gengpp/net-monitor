@@ -109,6 +109,15 @@ final class AccountStore {
         accounts.contains { $0.username == username }
     }
 
+    /// 昵称判重（精确匹配，区分大小写；空昵称不参与）
+    func nicknameExists(_ nickname: String) -> Bool {
+        let n = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return false }
+        return accounts.contains {
+            ($0.nickname ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == n
+        }
+    }
+
     func password(for username: String) -> String? {
         guard let acc = accounts.first(where: { $0.username == username }) else { return nil }
         return Self.open(acc.secret)
@@ -116,16 +125,29 @@ final class AccountStore {
 
     // MARK: 修改（返回错误提示，nil 表示成功）
 
+    /// 判重规则：昵称非空 → 按昵称判重（重复报「昵称已存在」）；昵称为空 → 按用户名判重。
+    /// username 始终保持唯一（内部主键：复制/解密/删除都以它定位）。
     @discardableResult
     func add(username: String, password: String, nickname: String? = nil) -> String? {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return "用户名不能为空" }
         guard !name.contains(" ") else { return "用户名不能包含空格" }
-        guard !exists(name) else { return "用户名已存在" }
         guard !password.isEmpty else { return "密码不能为空" }
         let nick = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveNick = (nick?.isEmpty == false) ? nick : nil
+
+        if let n = effectiveNick {
+            guard !nicknameExists(n) else { return "昵称「\(n)」已存在" }
+        }
+        // username 唯一性兜底：无论昵称是否参与判重，内部主键都不能撞
+        guard !exists(name) else {
+            return effectiveNick != nil
+                ? "用户名「\(name)」已存在（用户名也需唯一）"
+                : "用户名已存在"
+        }
+
         accounts.append(Account(username: name, secret: Self.seal(password),
-                                nickname: (nick?.isEmpty == false) ? nick : nil))
+                                nickname: effectiveNick))
         save()
         return nil
     }
@@ -134,6 +156,15 @@ final class AccountStore {
         accounts.removeAll { $0.username == username }
         save()
         return nil
+    }
+
+    /// 拖动排序：把 username 的账户移到 targetIndex（移除后插入，占据目标位置，其余顺移）
+    func move(username: String, to targetIndex: Int) {
+        guard let src = accounts.firstIndex(where: { $0.username == username }) else { return }
+        let item = accounts.remove(at: src)
+        let idx = min(max(targetIndex, 0), accounts.count)
+        accounts.insert(item, at: idx)
+        save()
     }
 
     func setPassword(username: String, password: String) -> String? {
@@ -186,8 +217,26 @@ final class TagChipView: NSView {
     var onClickCount: ((Int) -> Void)?
     var onRightClick: (() -> Void)?
 
+    /// 拖动排序回调：参数为（该标签的用户名，窗口坐标系下的当前鼠标位置）
+    var onDragReorder: ((String, NSPoint) -> Void)?
+    let usernameKey: String
+
     override func mouseDown(with event: NSEvent) {
-        onClickCount?(event.clickCount)
+        // 本地事件循环：区分「点击」与「拖动」（位移超 4px 视为拖动）
+        let start = event.locationInWindow
+        let clickCount = event.clickCount
+        var dragged = false
+        while true {
+            guard let e = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
+            if e.type == .leftMouseDragged {
+                let p = e.locationInWindow
+                if !dragged, abs(p.x - start.x) > 4 || abs(p.y - start.y) > 4 { dragged = true }
+                if dragged { onDragReorder?(usernameKey, p) }
+            } else {
+                break
+            }
+        }
+        if !dragged { onClickCount?(clickCount) }
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -197,8 +246,9 @@ final class TagChipView: NSView {
     /// 阻止默认右键菜单
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
-    init(text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
+    init(usernameKey: String, text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
          textWidth: CGFloat) {
+        self.usernameKey = usernameKey
         // 左内边距 9px，右内边距 14px（右侧略宽，视觉更平衡）
         super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 23, height: 22))
         wantsLayer = true
@@ -268,7 +318,7 @@ final class AccountPanelController: NSViewController {
     private var accField: NSTextField!
     private var passField: NSTextField!
     private var hintLabel: NSTextField!
-    private static let helpText = "双击＝复制用户名 · 三击＝复制密码 · 右键＝删除 · 改账户＝删后重加"
+    private static let helpText = "双击＝复制用户名 · 三击＝复制密码 · 右键＝删除 · 拖动＝排序"
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
 
@@ -380,6 +430,7 @@ final class AccountPanelController: NSViewController {
             let name = displayName(acc)
             let textW = ceil((name as NSString).size(withAttributes: para).width)
             let chip = TagChipView(
+                usernameKey: acc.username,
                 text: name,
                 colors: Self.tagPalette[colorIdx[idx]],
                 textWidth: textW)
@@ -388,6 +439,9 @@ final class AccountPanelController: NSViewController {
             }
             chip.onRightClick = { [weak self] in
                 self?.deleteTag(index: idx)
+            }
+            chip.onDragReorder = { [weak self] username, pointInWindow in
+                self?.handleDragReorder(username: username, pointInWindow: pointInWindow)
             }
             chip.frame = NSRect(x: 0, y: 0, width: textW + 23, height: 22)
             flowView.addSubview(chip)
@@ -414,6 +468,21 @@ final class AccountPanelController: NSViewController {
             return
         }
         // 单击：无动作
+    }
+
+    // MARK: 拖动排序
+
+    /// 鼠标拖到哪个标签上，就把被拖账户移到那个位置（实时换位，松手即持久化）
+    private func handleDragReorder(username: String, pointInWindow: NSPoint) {
+        let p = flowView.convert(pointInWindow, from: nil)
+        guard let targetIdx = flowView.subviews.firstIndex(where: {
+            ($0 as? TagChipView)?.usernameKey != username && $0.frame.contains(p)
+        }) else { return }
+        // 位置没变就不动
+        guard let srcIdx = store.accounts.firstIndex(where: { $0.username == username }),
+              srcIdx != targetIdx else { return }
+        store.move(username: username, to: targetIdx)
+        rebuildTags()
     }
 
     /// 右键标签：确认后删除（已屏蔽默认右键菜单）
