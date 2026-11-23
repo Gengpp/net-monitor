@@ -476,9 +476,10 @@ final class AccountPanelController: NSViewController {
         if let err = store.add(username: username, password: password, nickname: nickname) {
             showHint(err, ok: false); return
         }
-        selectedUsername = username
+        selectedUsername = nil
         rebuildTags()
-        showHint("已新增：\(username)", ok: true)
+        nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
+        showHint("已新增：\(username)，输入框已清空", ok: true)
     }
 
     /// 保存修改到所选账户
