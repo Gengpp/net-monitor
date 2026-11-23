@@ -171,16 +171,48 @@ final class AccountStore {
     }
 }
 
-// MARK: - 支持多击事件的标签按钮
+// MARK: - el-tag 风格彩色标签
 
-final class TagButton: NSButton {
-    /// (点击次数)
-    var onCountedClick: ((Int) -> Void)?
+private extension NSColor {
+    convenience init(hex: UInt32) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8) & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+}
+
+/// el-tag 样式：浅色底 + 同系边框 + 同系文字，圆角 4
+final class TagChipView: NSView {
+    var onClickCount: ((Int) -> Void)?
+    var onRightClick: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        onCountedClick?(event.clickCount)
+        onClickCount?(event.clickCount)
     }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onRightClick?()
+    }
+
+    /// 阻止默认右键菜单
+    override func menu(for event: NSEvent) -> NSMenu? { nil }
+
+    init(text: String, colors: (bg: NSColor, border: NSColor, text: NSColor),
+         selected: Bool, textWidth: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: textWidth + 18, height: 22))
+        wantsLayer = true
+        layer?.backgroundColor = colors.bg.cgColor
+        layer?.borderColor = colors.border.cgColor
+        layer?.borderWidth = selected ? 2 : 1
+        layer?.cornerRadius = 4
+        let lb = NSTextField(labelWithString: text)
+        lb.font = NSFont.systemFont(ofSize: 11, weight: selected ? .medium : .regular)
+        lb.textColor = colors.text
+        lb.frame = NSRect(x: 9, y: 3, width: textWidth, height: 16)
+        addSubview(lb)
+    }
+
+    required init?(coder: NSCoder) { fatalError("unused") }
 }
 
 // MARK: - 流式标签布局（宽度不足自动换行）
@@ -232,7 +264,7 @@ final class AccountPanelController: NSViewController {
     private var passField: NSTextField!
     private var selectedLabel: NSTextField!
     private var hintLabel: NSTextField!
-    private static let helpText = "单击标签＝载入内容（输入框文本可选中复制）· 双击＝复制用户名 · 三击＝复制密码 · ✕＝删除"
+    private static let helpText = "单击标签＝载入内容（输入框文本可选中复制）· 双击＝复制用户名 · 三击＝复制密码 · 右键标签＝删除"
     private var pendingLoad: DispatchWorkItem?
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
@@ -319,41 +351,61 @@ final class AccountPanelController: NSViewController {
         showHint("已载入「\(displayName(acc))」，文本可选中复制；点「新增账户」则添加新账户", ok: true)
     }
 
+    /// el-tag 同系配色（底色/边框/文字）
+    private static let tagPalette: [(bg: NSColor, border: NSColor, text: NSColor)] = [
+        (NSColor(hex: 0xECF5FF), NSColor(hex: 0xB3D8FF), NSColor(hex: 0x409EFF)),  // 蓝
+        (NSColor(hex: 0xF0F9EB), NSColor(hex: 0xC2E7B0), NSColor(hex: 0x67C23A)),  // 绿
+        (NSColor(hex: 0xFDF6EC), NSColor(hex: 0xF3D19E), NSColor(hex: 0xE6A23C)),  // 橙
+        (NSColor(hex: 0xFEF0F0), NSColor(hex: 0xFBC4C4), NSColor(hex: 0xF56C6C)),  // 红
+        (NSColor(hex: 0xF9F0FF), NSColor(hex: 0xDDBEF6), NSColor(hex: 0x9254DE)),  // 紫
+        (NSColor(hex: 0xE8FFFB), NSColor(hex: 0xB5F1EC), NSColor(hex: 0x13C2C2)),  // 青
+        (NSColor(hex: 0xFFF0F6), NSColor(hex: 0xFFD6E7), NSColor(hex: 0xEB2F96)),  // 品红
+        (NSColor(hex: 0xF4F4F5), NSColor(hex: 0xDADDE2), NSColor(hex: 0x909399)),  // 灰
+    ]
+
+    /// 用户名稳定哈希 → 调色板起始下标
+    private func stableIndex(_ s: String, modulus: Int) -> Int {
+        var h = 0
+        for ch in s.unicodeScalars { h = (h &* 31 &+ Int(ch.value)) & 0x7FFFFFFF }
+        return h % modulus
+    }
+
+    /// 为每个账户分配互不相同的颜色下标（同账户集合同顺序时结果稳定）
+    private func assignColorIndexes() -> [Int] {
+        let m = Self.tagPalette.count
+        var used = Set<Int>()
+        var result: [Int] = []
+        for acc in store.accounts {
+            var idx = stableIndex(acc.username, modulus: m)
+            while used.contains(idx) { idx = (idx + 1) % m }
+            used.insert(idx)
+            result.append(idx)
+        }
+        return result
+    }
+
     private func rebuildTags() {
         flowView.subviews.forEach { $0.removeFromSuperview() }
         let font = NSFont.systemFont(ofSize: 11)
+        let colorIdx = assignColorIndexes()
+        let para: [NSAttributedString.Key: Any] = [.font: font]
 
         for (idx, acc) in store.accounts.enumerated() {
             let name = displayName(acc)
-            let container = NSView()
-
-            let btn = TagButton(title: name, target: self, action: #selector(tagMainClicked(_:)))
-            btn.font = font
-            btn.bezelStyle = .rounded
-            btn.controlSize = .small
-            btn.lineBreakMode = .byTruncatingTail
-            if acc.username == selectedUsername {
-                btn.attributedTitle = NSAttributedString(
-                    string: name,
-                    attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-                                 .foregroundColor: NSColor.controlAccentColor])
-            }
-            btn.onCountedClick = { [weak self] clicks in
+            let textW = ceil((name as NSString).size(withAttributes: para).width)
+            let chip = TagChipView(
+                text: name,
+                colors: Self.tagPalette[colorIdx[idx]],
+                selected: acc.username == selectedUsername,
+                textWidth: textW)
+            chip.onClickCount = { [weak self] clicks in
                 self?.handleTagClick(index: idx, clicks: clicks)
             }
-            let nameW = max(ceil(btn.intrinsicContentSize.width) + 4, 40)
-            btn.frame = NSRect(x: 0, y: 0, width: nameW, height: 20)
-            container.addSubview(btn)
-
-            let del = NSButton(title: "✕", target: self, action: #selector(tagDeleteClicked(_:)))
-            del.isBordered = false
-            del.font = NSFont.systemFont(ofSize: 10, weight: .medium)
-            del.controlSize = .small
-            del.frame = NSRect(x: nameW, y: 3, width: 14, height: 14)
-            container.addSubview(del)
-
-            container.frame = NSRect(x: 0, y: 0, width: nameW + 14, height: 20)
-            flowView.addSubview(container)
+            chip.onRightClick = { [weak self] in
+                self?.deleteTag(index: idx)
+            }
+            chip.frame = NSRect(x: 0, y: 0, width: textW + 18, height: 22)
+            flowView.addSubview(chip)
         }
         flowView.needsLayout = true
         if let sel = selectedUsername, let acc = store.accounts.first(where: { $0.username == sel }) {
@@ -388,29 +440,18 @@ final class AccountPanelController: NSViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: w)
     }
 
-    @objc private func tagMainClicked(_ sender: NSButton) {
-        // 点击逻辑统一走 onCountedClick（带 clickCount）
-    }
-
-    @objc private func tagDeleteClicked(_ sender: NSButton) {
-        let idx = sender.tag
-        guard idx < store.accounts.count else { return }
-        let name = store.accounts[idx].username
-        let alert = NSAlert()
-        alert.messageText = "删除账户「\(displayName(store.accounts[idx]))」？"
-        alert.informativeText = "用户名：\(name)\n删除后不可恢复。"
-        alert.addButton(withTitle: "删除")
-        alert.addButton(withTitle: "取消")
-        alert.alertStyle = .warning
-        if alert.runModal() == .alertFirstButtonReturn {
-            _ = store.remove(username: name)
-            if selectedUsername == name {
-                selectedUsername = nil
-                nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
-            }
-            rebuildTags()
-            showHint("已删除：\(name)", ok: true)
+    /// 右键标签：直接删除（已屏蔽默认右键菜单），并同步刷新标签与表单状态
+    private func deleteTag(index: Int) {
+        guard index < store.accounts.count else { return }
+        let acc = store.accounts[index]
+        let shown = displayName(acc)
+        _ = store.remove(username: acc.username)
+        if selectedUsername == acc.username {
+            selectedUsername = nil
+            nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
         }
+        rebuildTags()
+        showHint("已删除：\(shown)", ok: true)
     }
 
     // MARK: 表单按钮
