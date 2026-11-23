@@ -271,10 +271,10 @@ final class AccountPanelController: NSViewController {
     private var selectedUsername: String?
 
     override func loadView() {
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 248))
 
         // 标签流式区（顶部）
-        let scroll = NSScrollView(frame: NSRect(x: 8, y: 128, width: 288, height: 96))
+        let scroll = NSScrollView(frame: NSRect(x: 8, y: 144, width: 288, height: 96))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let flow = TagFlowView(frame: NSRect(x: 0, y: 0, width: 286, height: 96))
@@ -297,16 +297,16 @@ final class AccountPanelController: NSViewController {
             v.addSubview(f)
             return f
         }
-        // 昵称框顶边 y=118，与标签区底边 y=128 正好间隔 10px
-        nickField = formRow("昵称:", 96, "请输入昵称（可留空）")
-        accField = formRow("账户:", 68, "请输入账户")
-        passField = formRow("密码:", 40, "请输入密码")
+        // 昵称框顶边 y=134，与标签区底边 y=144 间隔 10px；按钮行顶边 y=46，与密码框底边 y=56 间隔 10px
+        nickField = formRow("昵称:", 112, "请输入昵称（可留空）")
+        accField = formRow("账户:", 84, "请输入账户")
+        passField = formRow("密码:", 56, "请输入密码")
 
         // 按钮行
         @discardableResult
         func smallButton(_ title: String, _ x: CGFloat, _ w: CGFloat, _ sel: Selector) -> NSButton {
             let b = NSButton(title: title, target: self, action: sel)
-            b.frame = NSRect(x: x, y: 16, width: w, height: 26)
+            b.frame = NSRect(x: x, y: 20, width: w, height: 26)
             b.bezelStyle = .rounded
             b.font = NSFont.systemFont(ofSize: 11)
             v.addSubview(b)
@@ -315,7 +315,7 @@ final class AccountPanelController: NSViewController {
         smallButton("新增账户", 56, 92, #selector(addNewAccount))
         smallButton("保存修改", 152, 92, #selector(saveSelected))
         selectedLabel = NSTextField(labelWithString: "未选中")
-        selectedLabel.frame = NSRect(x: 248, y: 23, width: 48, height: 14)
+        selectedLabel.frame = NSRect(x: 248, y: 27, width: 48, height: 14)
         selectedLabel.font = NSFont.systemFont(ofSize: 9)
         selectedLabel.textColor = .secondaryLabelColor
         selectedLabel.lineBreakMode = .byTruncatingTail

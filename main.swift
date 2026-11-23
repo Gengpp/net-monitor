@@ -164,7 +164,7 @@ final class MonitorPanelController: NSViewController {
     required init?(coder: NSCoder) { fatalError("unused") }
 
     override func loadView() {
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 232))
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 304, height: 248))
 
         func label(_ rect: NSRect, size: CGFloat, weight: NSFont.Weight = .regular,
                    color: NSColor = .labelColor) -> NSTextField {
@@ -176,10 +176,10 @@ final class MonitorPanelController: NSViewController {
             return tf
         }
 
-        downField = label(NSRect(x: 8, y: 190, width: 140, height: 32), size: 17, weight: .semibold)
-        upField = label(NSRect(x: 156, y: 190, width: 140, height: 32), size: 17, weight: .semibold)
+        downField = label(NSRect(x: 8, y: 206, width: 140, height: 32), size: 17, weight: .semibold)
+        upField = label(NSRect(x: 156, y: 206, width: 140, height: 32), size: 17, weight: .semibold)
 
-        chartView = ChartView(frame: NSRect(x: 8, y: 62, width: 288, height: 122))
+        chartView = ChartView(frame: NSRect(x: 8, y: 62, width: 288, height: 138))
         chartView.autoresizingMask = [.width]
         v.addSubview(chartView)
 
@@ -252,7 +252,7 @@ final class MainWindowController: NSWindowController {
 
     convenience init(monitor: NetMonitor) {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 296),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         win.title = "NetMonitor"
         win.isReleasedWhenClosed = false
@@ -270,7 +270,7 @@ final class MainWindowController: NSWindowController {
 
         let seg = NSSegmentedControl(labels: ["账户本", "流量监控"], trackingMode: .selectOne, target: self,
                                      action: #selector(segmentChanged))
-        seg.frame = NSRect(x: 10, y: 246, width: 150, height: 24)
+        seg.frame = NSRect(x: 10, y: 262, width: 150, height: 24)
         seg.font = NSFont.systemFont(ofSize: 11)
         seg.selectedSegment = 0
         content.addSubview(seg)
@@ -292,7 +292,7 @@ final class MainWindowController: NSWindowController {
         pinButton = pin
 
         for panel in [accountPanel.view, monitorPanel.view] {
-            panel.frame = NSRect(x: 8, y: 8, width: 304, height: 232)
+            panel.frame = NSRect(x: 8, y: 8, width: 304, height: 248)
             panel.autoresizingMask = [.width]
             content.addSubview(panel)
         }
