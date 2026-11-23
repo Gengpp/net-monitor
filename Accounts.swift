@@ -364,7 +364,8 @@ final class AccountPanelController: NSViewController {
             v.addSubview(b)
             return b
         }
-        smallButton("新增账户", 106, 92, #selector(addNewAccount))
+        smallButton("新增账户", 56, 92, #selector(addNewAccount))
+        smallButton("重置", 152, 92, #selector(resetFields))
 
         // 提示/帮助（默认显示交互说明，有状态消息时临时替换）
         hintLabel = NSTextField(labelWithString: Self.helpText)
@@ -520,6 +521,12 @@ final class AccountPanelController: NSViewController {
         rebuildTags()
         nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
         showHint("已新增：\(username)，输入框已清空", ok: true)
+    }
+
+    /// 清空三个输入框（不影响已存储的账户）
+    @objc private func resetFields() {
+        nickField.stringValue = ""; accField.stringValue = ""; passField.stringValue = ""
+        showHint("输入框已清空", ok: true)
     }
 
     /// 读取三个输入框（昵称可留空）
