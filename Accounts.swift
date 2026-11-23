@@ -263,7 +263,7 @@ final class AccountPanelController: NSViewController {
     private var accField: NSTextField!
     private var passField: NSTextField!
     private var hintLabel: NSTextField!
-    private static let helpText = "双击标签＝复制用户名 · 三击标签＝复制密码 · 右键标签＝删除（修改账户＝删除后重新添加）"
+    private static let helpText = "双击＝复制用户名 · 三击＝复制密码 · 右键＝删除 · 改账户＝删后重加"
     private var pendingCopy: DispatchWorkItem?
     private var hintResetWork: DispatchWorkItem?
 
